@@ -13,6 +13,9 @@ fn wd(id: &str) -> PathBuf { mm().join("workspaces").join(id) }
 fn ps(p: &PathBuf) -> &str { p.to_str().unwrap_or("") }
 
 fn format_arg_for_argfile(arg: &str) -> String {
+    if arg.is_empty() {
+        return "\"\"".to_string();
+    }
     let needs_quote = arg.chars().any(|c| c.is_whitespace() || c == '"');
     if !needs_quote {
         return arg.to_string();
@@ -30,7 +33,7 @@ fn write_java_argfile(ws: &PathBuf, args: &[String]) -> Result<PathBuf, String> 
         .iter()
         .map(|a| format_arg_for_argfile(a))
         .collect::<Vec<_>>()
-        .join("\n");
+        .join(" ");
     std::fs::write(&argfile, content)
         .map_err(|e| format!("写入 argfile 失败: {e}"))?;
     Ok(argfile)
