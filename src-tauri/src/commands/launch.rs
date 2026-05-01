@@ -124,7 +124,7 @@ pub async fn launch_game(
         .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
         .unwrap_or_default();
     ja.extend([
-        "--add-modules", "ALL-MODULAR-PATH",
+        "--add-modules", "ALL-MODULE-PATH",
         "--add-opens", "java.base/java.lang=ALL-UNNAMED",
         "--add-opens", "java.base/java.util=ALL-UNNAMED",
         "--add-opens", "java.base/java.lang.reflect=ALL-UNNAMED",
