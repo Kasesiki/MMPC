@@ -2,5 +2,11 @@
 	"/": [
 		"src/routes/+layout.ts",
 		"src/routes/+layout.ts"
+	],
+	"/java": [
+		"src/routes/+layout.ts"
+	],
+	"/workspace/[id]": [
+		"src/routes/+layout.ts"
 	]
 }
