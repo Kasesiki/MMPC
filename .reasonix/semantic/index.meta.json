@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "model": "nomic-embed-text",
+  "dim": 768,
+  "updatedAt": "2026-05-01T12:04:53.235Z"
+}

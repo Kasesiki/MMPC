@@ -1,0 +1,12 @@
+[package]
+name = "mc_launcher_core"
+version = "0.1.0"
+description = "Minecraft launcher SDK — offline auth & launch, extensible for online auth"
+edition = "2021"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v3", "serde"] }
+md-5 = "0.10"
+thiserror = "2"

@@ -13,6 +13,8 @@ target
 # Contains mutation testing data
 **/mutants.out*/
 
+README_AI.md
+
 node_modules/
 # RustRover
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
