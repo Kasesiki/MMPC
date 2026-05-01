@@ -29,4 +29,4 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4"] }
 futures-util = "0.3"
 zip = { version = "2", default-features = false, features = ["deflate"] }
-
+sha1 = "0.10.6"

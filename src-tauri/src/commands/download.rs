@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use sha1::{Digest, Sha1};
 use tauri::Emitter;
 
 // ─── Version manifest (from launchermeta) ───
@@ -136,10 +137,45 @@ async fn download_file(url: &str, dest: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn compute_file_sha1(path: &Path) -> Result<String, String> {
+    let mut file = std::fs::File::open(path)
+        .map_err(|e| format!("打开文件失败: {}", e))?;
+    let mut hasher = Sha1::new();
+    let mut buf = [0u8; 8192];
+    loop {
+        let n = std::io::Read::read(&mut file, &mut buf)
+            .map_err(|e| format!("读取文件失败: {}", e))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn file_matches_sha1(path: &Path, expected_sha1: &str) -> Result<bool, String> {
+    if expected_sha1.trim().is_empty() || !path.exists() {
+        return Ok(false);
+    }
+    let actual = compute_file_sha1(path)?;
+    Ok(actual.eq_ignore_ascii_case(expected_sha1))
+}
+
+fn should_download_with_sha1(path: &Path, expected_sha1: &str) -> Result<bool, String> {
+    if !path.exists() {
+        return Ok(true);
+    }
+    if expected_sha1.trim().is_empty() {
+        return Ok(false);
+    }
+    Ok(!file_matches_sha1(path, expected_sha1)?)
+}
+
 async fn download_asset_with_retry(
     url: &str,
     dest: &Path,
     expected_size: u64,
+    expected_sha1: &str,
     max_retries: u32,
 ) -> Result<(), String> {
     let mut last_err = String::new();
@@ -147,6 +183,19 @@ async fn download_asset_with_retry(
         if let Err(e) = download_file(url, dest).await {
             last_err = format!("尝试 {attempt}/{max_retries} 失败: {e}");
             continue;
+        }
+        if !expected_sha1.is_empty() {
+            match file_matches_sha1(dest, expected_sha1) {
+                Ok(true) => return Ok(()),
+                Ok(false) => {
+                    last_err = format!("尝试 {attempt}/{max_retries} SHA1 校验失败");
+                    continue;
+                }
+                Err(e) => {
+                    last_err = format!("尝试 {attempt}/{max_retries} SHA1 校验失败: {e}");
+                    continue;
+                }
+            }
         }
         match std::fs::metadata(dest) {
             Ok(meta) if meta.len() == expected_size => return Ok(()),
@@ -302,12 +351,22 @@ pub async fn download_mc_version(
 
     let client_url = &version_json.downloads.client.url;
     let client_path = ver_dir.join("client.jar");
-    download_file_with_progress(&app, client_url, &client_path, "下载 client.jar").await?;
+    if should_download_with_sha1(&client_path, &version_json.downloads.client.sha1)? {
+        download_file_with_progress(&app, client_url, &client_path, "下载 client.jar").await?;
+    } else {
+        app.emit("download-progress", serde_json::json!({"stage": "下载 client.jar", "progress": 100}))
+            .ok();
+    }
 
     // 6. Download & extract asset index
     let asset_index_url = &version_json.asset_index.url;
     let ai_path = ver_dir.join("asset_index.json");
-    download_file_with_progress(&app, asset_index_url, &ai_path, "下载 asset index").await?;
+    if should_download_with_sha1(&ai_path, &version_json.asset_index.sha1)? {
+        download_file_with_progress(&app, asset_index_url, &ai_path, "下载 asset index").await?;
+    } else {
+        app.emit("download-progress", serde_json::json!({"stage": "下载 asset index", "progress": 100}))
+            .ok();
+    }
 
     // 7. Download libraries
     app.emit("download-progress", serde_json::json!({"stage": "下载 libraries", "progress": 0}))
@@ -336,7 +395,7 @@ pub async fn download_mc_version(
         if let Some(artifact) = downloads.artifact.as_ref() {
             if let Some(rel_path) = resolve_download_path(artifact) {
                 let lib_path = libs_dir.join(rel_path);
-                if !lib_path.exists() {
+                if should_download_with_sha1(&lib_path, &artifact.sha1)? {
                     if let Some(parent) = lib_path.parent() {
                         std::fs::create_dir_all(parent)
                             .map_err(|e| format!("创建库目录失败: {}", e))?;
@@ -358,7 +417,7 @@ pub async fn download_mc_version(
             if let Some(native_entry) = classifiers.get(&native_classifier) {
                 if let Some(rel_path) = resolve_download_path(native_entry) {
                     let native_path = libs_dir.join(rel_path);
-                    if !native_path.exists() {
+                    if should_download_with_sha1(&native_path, &native_entry.sha1)? {
                         if let Some(parent) = native_path.parent() {
                             std::fs::create_dir_all(parent)
                                 .map_err(|e| format!("创建 natives 目录失败: {}", e))?;
@@ -396,8 +455,10 @@ pub async fn download_mc_version(
     let asset_index: AssetIndexObjects = serde_json::from_str(&ai_content)
         .map_err(|e| format!("解析 asset index 失败: {}", e))?;
     let asset_index_dest = assets_indexes_dir.join(format!("{}.json", version_json.asset_index.id));
-    std::fs::copy(&ai_path, &asset_index_dest)
-        .map_err(|e| format!("写入 assets index 失败: {}", e))?;
+    if should_download_with_sha1(&asset_index_dest, &version_json.asset_index.sha1)? {
+        std::fs::copy(&ai_path, &asset_index_dest)
+            .map_err(|e| format!("写入 assets index 失败: {}", e))?;
+    }
 
     let total_objects = asset_index.objects.len();
     let mut downloaded_assets = 0u64;
@@ -407,10 +468,7 @@ pub async fn download_mc_version(
         let hash = &obj.hash;
         let sub_dir = &hash[..2];
         let asset_path = assets_base.join(sub_dir).join(hash);
-        let should_download = match std::fs::metadata(&asset_path) {
-            Ok(meta) => meta.len() != obj.size,
-            Err(_) => true,
-        };
+        let should_download = !file_matches_sha1(&asset_path, hash).unwrap_or(false);
 
         if should_download {
             let url = format!("https://resources.download.minecraft.net/{}/{}", sub_dir, hash);
@@ -418,7 +476,7 @@ pub async fn download_mc_version(
                 std::fs::create_dir_all(parent)
                     .map_err(|e| format!("创建 asset 目录失败: {}", e))?;
             }
-            if let Err(e) = download_asset_with_retry(&url, &asset_path, obj.size, 3).await {
+            if let Err(e) = download_asset_with_retry(&url, &asset_path, obj.size, hash, 3).await {
                 eprintln!("[mmpc] 下载 asset {} 失败: {}", hash, e);
                 failed_assets.push(hash.to_string());
             }
