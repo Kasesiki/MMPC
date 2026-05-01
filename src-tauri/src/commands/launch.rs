@@ -1,5 +1,7 @@
 use mc_launcher_core::auth::offline::OfflineUser;
 use mc_launcher_core::launch::offline::{LaunchConfig, OfflineLauncher};
+use serde::Deserialize;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use tauri::Emitter;
 use zip::read::ZipArchive;
@@ -86,6 +88,16 @@ fn is_native_lib_file(name: &str) -> bool {
     name.ends_with(".dll") || name.ends_with(".so") || name.ends_with(".dylib")
 }
 
+#[derive(Debug, Deserialize)]
+struct AssetIndexObjects {
+    objects: HashMap<String, AssetObject>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AssetObject {
+    hash: String,
+}
+
 fn prepare_natives_dir(ws: &PathBuf, libraries: &[PathBuf]) -> Result<(), String> {
     let natives_dir = ws.join("natives");
     std::fs::create_dir_all(&natives_dir)
@@ -126,6 +138,44 @@ fn prepare_natives_dir(ws: &PathBuf, libraries: &[PathBuf]) -> Result<(), String
     Ok(())
 }
 
+fn ensure_required_assets(ws: &PathBuf) -> Result<(), String> {
+    let asset_index_path = ws.join("versions").join("asset_index.json");
+    if !asset_index_path.exists() {
+        return Err("缺少 asset_index.json，请先点击“下载/修复 MC 依赖”".into());
+    }
+
+    let asset_index_content = std::fs::read_to_string(&asset_index_path)
+        .map_err(|e| format!("读取 asset_index.json 失败: {e}"))?;
+    let asset_index: AssetIndexObjects = serde_json::from_str(&asset_index_content)
+        .map_err(|e| format!("解析 asset_index.json 失败: {e}"))?;
+
+    let assets_objects_dir = mm().join("assets").join("objects");
+    let mut missing_count = 0usize;
+    let mut sample_hashes = Vec::new();
+
+    for obj in asset_index.objects.values() {
+        if obj.hash.len() < 2 {
+            continue;
+        }
+        let asset_path = assets_objects_dir.join(&obj.hash[..2]).join(&obj.hash);
+        if !asset_path.is_file() {
+            missing_count += 1;
+            if sample_hashes.len() < 6 {
+                sample_hashes.push(obj.hash.clone());
+            }
+        }
+    }
+
+    if missing_count > 0 {
+        return Err(format!(
+            "资源文件不完整，缺少 {missing_count} 个 assets，示例哈希: {}。请先点击“下载/修复 MC 依赖”完成补全后再启动。",
+            sample_hashes.join(", ")
+        ));
+    }
+
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn launch_game(
     app: tauri::AppHandle,
@@ -145,6 +195,7 @@ pub async fn launch_game(
     if libraries.is_empty() {
         return Err("未检测到 libraries 依赖，请先下载 MC 版本".into());
     }
+    ensure_required_assets(&ws)?;
     prepare_natives_dir(&ws, &libraries)?;
 
     // Collect JVM args

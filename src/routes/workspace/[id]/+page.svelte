@@ -36,7 +36,6 @@
     const unlisten = listen<any>("download-progress", (e) => {
       dlStage = e.payload.stage || "";
       dlPct = e.payload.progress || 0;
-      if (dlPct >= 100) { setTimeout(() => { downloading = false; }, 1000); }
     });
     const unlistenGame = listen<any>("game-status", (e) => {
       const state = e.payload?.state;
@@ -59,8 +58,12 @@
     dlPct = 0;
     try {
       await invoke("download_mc_version", { workspaceId: ws.id, mcVersion: ws.mc_version });
+      dlStage = "完成";
+      dlPct = 100;
     } catch (e: any) {
       dlStage = "下载失败: " + e;
+    } finally {
+      downloading = false;
     }
   }
 
