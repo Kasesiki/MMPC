@@ -2,6 +2,7 @@ use mc_launcher_core::auth::offline::OfflineUser;
 use mc_launcher_core::launch::offline::{LaunchConfig, OfflineLauncher};
 use std::path::PathBuf;
 use tauri::Emitter;
+use zip::read::ZipArchive;
 
 fn mm() -> PathBuf {
     let e = std::env::current_exe().unwrap_or_default();
@@ -46,13 +47,64 @@ fn collect_libs_recursive(dir: &PathBuf) -> Vec<PathBuf> {
     jars
 }
 
+fn is_native_jar(path: &PathBuf) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .map(|name| name.contains("-natives-") && name.ends_with(".jar"))
+        .unwrap_or(false)
+}
+
+fn is_native_lib_file(name: &str) -> bool {
+    name.ends_with(".dll") || name.ends_with(".so") || name.ends_with(".dylib")
+}
+
+fn prepare_natives_dir(ws: &PathBuf, libraries: &[PathBuf]) -> Result<(), String> {
+    let natives_dir = ws.join("natives");
+    std::fs::create_dir_all(&natives_dir)
+        .map_err(|e| format!("创建 natives 目录失败: {e}"))?;
+
+    for lib in libraries {
+        if !is_native_jar(lib) {
+            continue;
+        }
+
+        let file = std::fs::File::open(lib)
+            .map_err(|e| format!("打开 natives jar 失败 ({}): {e}", lib.display()))?;
+        let mut zip = ZipArchive::new(file)
+            .map_err(|e| format!("读取 natives jar 失败 ({}): {e}", lib.display()))?;
+
+        for i in 0..zip.len() {
+            let mut entry = zip
+                .by_index(i)
+                .map_err(|e| format!("读取 natives 条目失败 ({}): {e}", lib.display()))?;
+            if !entry.is_file() {
+                continue;
+            }
+            let Some(name) = entry.enclosed_name() else {
+                continue;
+            };
+            let file_name = name.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if !is_native_lib_file(file_name) {
+                continue;
+            }
+            let out_path = natives_dir.join(file_name);
+            let mut out = std::fs::File::create(&out_path)
+                .map_err(|e| format!("写入 natives 文件失败 ({}): {e}", out_path.display()))?;
+            std::io::copy(&mut entry, &mut out)
+                .map_err(|e| format!("解压 natives 文件失败 ({}): {e}", out_path.display()))?;
+        }
+    }
+
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn launch_game(
     app: tauri::AppHandle,
     workspace_id: String,
     player_name: String,
     java_path: Option<String>,
-) -> Result<String, String> {
+) -> Result<u32, String> {
     let ws = wd(&workspace_id);
     let pk = ws.join("pack.json");
     let c = std::fs::read_to_string(&pk).map_err(|e| format!("read {e}"))?;
@@ -65,6 +117,7 @@ pub async fn launch_game(
     if libraries.is_empty() {
         return Err("未检测到 libraries 依赖，请先下载 MC 版本".into());
     }
+    prepare_natives_dir(&ws, &libraries)?;
 
     // Collect JVM args
     let mut ja: Vec<String> = cfg["jvm_args"].as_array()
@@ -132,5 +185,5 @@ pub async fn launch_game(
         let _ = ch.wait();
         a2.emit("game-status", serde_json::json!({"state":"stopped"})).ok();
     });
-    Ok(format!("PID: {pid}"))
+    Ok(pid)
 }
