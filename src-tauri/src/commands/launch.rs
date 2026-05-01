@@ -12,6 +12,30 @@ fn mm() -> PathBuf {
 fn wd(id: &str) -> PathBuf { mm().join("workspaces").join(id) }
 fn ps(p: &PathBuf) -> &str { p.to_str().unwrap_or("") }
 
+fn format_arg_for_argfile(arg: &str) -> String {
+    let needs_quote = arg.chars().any(|c| c.is_whitespace() || c == '"');
+    if !needs_quote {
+        return arg.to_string();
+    }
+    let escaped = arg.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{escaped}\"")
+}
+
+fn write_java_argfile(ws: &PathBuf, args: &[String]) -> Result<PathBuf, String> {
+    let launch_dir = ws.join("launch");
+    std::fs::create_dir_all(&launch_dir)
+        .map_err(|e| format!("创建 launch 目录失败: {e}"))?;
+    let argfile = launch_dir.join("java.args");
+    let content = args
+        .iter()
+        .map(|a| format_arg_for_argfile(a))
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(&argfile, content)
+        .map_err(|e| format!("写入 argfile 失败: {e}"))?;
+    Ok(argfile)
+}
+
 /// Collect all .jar library paths under versions/libraries/ recursively
 fn collect_libraries(ws: &PathBuf) -> Vec<PathBuf> {
     let libs_dir = ws.join("versions").join("libraries");
@@ -140,6 +164,18 @@ pub async fn launch_game(
         .or(configured_java)
         .unwrap_or_else(|| "java".into());
     let mc_ver = cfg["mc_version"].as_str().unwrap_or("1.21");
+    let version_json_path = ws.join("versions").join("version.json");
+    let version_meta = std::fs::read_to_string(&version_json_path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
+    let asset_index_id = version_meta
+        .as_ref()
+        .and_then(|v| v["assetIndex"]["id"].as_str())
+        .unwrap_or(mc_ver);
+    let main_class = version_meta
+        .as_ref()
+        .and_then(|v| v["mainClass"].as_str())
+        .unwrap_or("net.minecraft.client.main.Main");
     let mx = cfg["max_memory_mb"].as_u64().unwrap_or(4096);
     let mi = cfg["min_memory_mb"].as_u64().unwrap_or(1024);
     let w = cfg["window_width"].as_u64().unwrap_or(1280) as u32;
@@ -150,9 +186,9 @@ pub async fn launch_game(
 
     let mut b = LaunchConfig::builder()
         .java_path(&jv).minecraft_jar(ps(&cj))
-        .main_class("net.minecraft.client.main.Main")
+        .main_class(main_class)
         .game_dir(ps(&ws)).assets_dir(ps(&assets_dir))
-        .asset_index(mc_ver)
+        .asset_index(asset_index_id)
         .max_mem(&format!("{mx}M")).min_mem(&format!("{mi}M"))
         .resolution(w, h);
     for a in &ja { b = b.add_jvm_arg(a); }
@@ -163,13 +199,21 @@ pub async fn launch_game(
     let lc = b.build();
 
     let u = OfflineUser::new(&player_name);
-    let mut cmd = OfflineLauncher.build_command(&lc, &u);
+    let built = OfflineLauncher.build_command(&lc, &u);
+    let program = built.get_program().to_os_string();
+    let args = built
+        .get_args()
+        .map(|a| a.to_string_lossy().to_string())
+        .collect::<Vec<_>>();
+    let argfile = write_java_argfile(&ws, &args)?;
+    let mut cmd = std::process::Command::new(program.clone());
+    cmd.arg(format!("@{}", argfile.to_string_lossy()));
 
-    // Log command
-    let cds: String = std::iter::once(cmd.get_program().to_string_lossy().to_string())
-        .chain(cmd.get_args().map(|a| a.to_string_lossy().to_string()))
-        .collect::<Vec<_>>().join(" ");
-    app.emit("game-status", serde_json::json!({"state":"log","message":cds})).ok();
+    // Log command (argfile style)
+    app.emit("game-status", serde_json::json!({
+        "state":"log",
+        "message": format!("{} @{}", program.to_string_lossy(), argfile.display())
+    })).ok();
 
     cmd.stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
