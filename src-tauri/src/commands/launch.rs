@@ -3,6 +3,7 @@ use mc_launcher_core::launch::offline::{LaunchConfig, OfflineLauncher};
 use std::path::PathBuf;
 use tauri::Emitter;
 use zip::read::ZipArchive;
+use super::java::resolve_java_path_by_id;
 
 fn mm() -> PathBuf {
     let e = std::env::current_exe().unwrap_or_default();
@@ -132,7 +133,12 @@ pub async fn launch_game(
         "--add-opens", "java.desktop/java.awt=ALL-UNNAMED",
     ].map(String::from));
 
-    let jv = java_path.unwrap_or_else(|| "java".into());
+    let configured_java = cfg["java_runtime_id"]
+        .as_str()
+        .and_then(|id| resolve_java_path_by_id(id).ok().flatten());
+    let jv = java_path
+        .or(configured_java)
+        .unwrap_or_else(|| "java".into());
     let mc_ver = cfg["mc_version"].as_str().unwrap_or("1.21");
     let mx = cfg["max_memory_mb"].as_u64().unwrap_or(4096);
     let mi = cfg["min_memory_mb"].as_u64().unwrap_or(1024);

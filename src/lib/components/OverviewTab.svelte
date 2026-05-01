@@ -5,7 +5,9 @@ import { launchStatus } from "$lib/stores/workspace";
 let {
   workspace,
   ondownloadmc,
-  downloading = false
+  downloading = false,
+  onconfigjava,
+  javaLabel = "默认"
 } = $props<any>();
 
 let status = $state<any>({ state: 'idle' });
@@ -49,6 +51,11 @@ async function handleLaunch() {
       <div class="mt-4">
         <button class="btn btn-outline btn-sm" onclick={ondownloadmc} disabled={downloading}>
           {downloading ? "下载中..." : "下载/修复 MC 依赖"}
+        </button>
+      </div>
+      <div class="mt-2">
+        <button class="btn btn-outline btn-sm" onclick={onconfigjava}>
+          配置 Java（当前：{javaLabel}）
         </button>
       </div>
     </div>

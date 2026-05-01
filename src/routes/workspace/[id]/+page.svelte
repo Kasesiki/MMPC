@@ -7,7 +7,7 @@
   import OverviewTab from "$lib/components/OverviewTab.svelte";
   import ModsTab from "$lib/components/ModsTab.svelte";
   import ConfigTab from "$lib/components/ConfigTab.svelte";
-  import type { Workspace, PackConfig } from "$lib/types";
+  import type { Workspace, PackConfig, JavaRuntime } from "$lib/types";
 
   let { params } = $props();
   let ws = $state<any>(null);
@@ -17,6 +17,11 @@
   let dlPct = $state<number>(0);
   let downloading = $state(false);
   let gameLogs = $state<string[]>([]);
+  let javaList = $state<JavaRuntime[]>([]);
+  let showJavaModal = $state(false);
+  let javaSaving = $state(false);
+  let selectedJavaId = $state<string>("");
+  let javaErr = $state("");
 
   onMount(() => {
     const id = params.id;
@@ -25,6 +30,7 @@
 
     // Load full config
     invoke("get_pack_config", { id }).then((cfg: any) => { fullCfg = cfg; }).catch(() => {});
+    invoke<JavaRuntime[]>("list_java_runtimes").then((list) => { javaList = list; }).catch(() => {});
 
     // Listen for download progress
     const unlisten = listen<any>("download-progress", (e) => {
@@ -55,6 +61,40 @@
       await invoke("download_mc_version", { workspaceId: ws.id, mcVersion: ws.mc_version });
     } catch (e: any) {
       dlStage = "下载失败: " + e;
+    }
+  }
+
+  function currentJavaLabel() {
+    if (!fullCfg?.java_runtime_id) return "默认";
+    const found = javaList.find((j) => j.id === fullCfg?.java_runtime_id);
+    if (!found) return "已删除";
+    const major = found.major_version ? `Java ${found.major_version}` : found.version_text;
+    return `${found.name} (${major})`;
+  }
+
+  function openJavaModal() {
+    if (!fullCfg) return;
+    selectedJavaId = fullCfg.java_runtime_id || "";
+    javaErr = "";
+    showJavaModal = true;
+  }
+
+  async function saveJavaSelection() {
+    if (!ws || !fullCfg || javaSaving) return;
+    javaSaving = true;
+    javaErr = "";
+    try {
+      const nextCfg = {
+        ...fullCfg,
+        java_runtime_id: selectedJavaId || null
+      };
+      await invoke("save_pack_config", { id: ws.id, config: nextCfg });
+      fullCfg = nextCfg as any;
+      showJavaModal = false;
+    } catch (e: any) {
+      javaErr = String(e);
+    } finally {
+      javaSaving = false;
     }
   }
 
@@ -96,7 +136,14 @@
       <button role="tab" class="tab tab-lg {activeTab === 'config' ? 'tab-active' : ''}" onclick={() => activeTab = 'config'}>配置</button>
     </div>
     {#if activeTab === 'overview'}
-      <OverviewTab workspace={ws} fullConfig={fullCfg} ondownloadmc={handleDownloadMc} downloading={downloading} />
+      <OverviewTab
+        workspace={ws}
+        fullConfig={fullCfg}
+        ondownloadmc={handleDownloadMc}
+        onconfigjava={openJavaModal}
+        javaLabel={currentJavaLabel()}
+        downloading={downloading}
+      />
     {:else if activeTab === 'mods'}
       <ModsTab workspace={ws} />
     {:else if activeTab === 'config'}
@@ -108,3 +155,37 @@
     <div class="alert alert-warning">工作区未找到</div>
   {/if}
 </div>
+
+{#if showJavaModal}
+  <div class="modal modal-open">
+    <div class="modal-box">
+      <h3 class="font-bold text-lg mb-4">配置工作区 Java</h3>
+      <div class="form-control gap-3">
+        <label class="label" for="java-select"><span class="label-text">选择启动时使用的 Java</span></label>
+        <select id="java-select" class="select select-bordered w-full" bind:value={selectedJavaId}>
+          <option value="">默认（系统 java）</option>
+          {#each javaList as j}
+            <option value={j.id}>
+              {j.name} - {j.major_version ? `Java ${j.major_version}` : j.version_text}
+            </option>
+          {/each}
+        </select>
+        {#if javaList.length === 0}
+          <div class="alert alert-warning text-sm mt-2">
+            <span>还没有可用 Java，请先到“Java 管理”页面添加。</span>
+          </div>
+        {/if}
+        {#if javaErr}
+          <div class="alert alert-error text-sm"><span>{javaErr}</span></div>
+        {/if}
+      </div>
+      <div class="modal-action">
+        <button class="btn btn-ghost" onclick={() => showJavaModal = false}>取消</button>
+        <button class="btn btn-primary" onclick={saveJavaSelection} disabled={javaSaving}>
+          {javaSaving ? "保存中..." : "保存"}
+        </button>
+      </div>
+    </div>
+    <div class="modal-backdrop" role="button" tabindex="0" onclick={() => showJavaModal = false} onkeydown={(e) => e.key === 'Enter' && (showJavaModal = false)}></div>
+  </div>
+{/if}
