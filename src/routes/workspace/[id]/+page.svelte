@@ -3,7 +3,7 @@
   import { listen } from "@tauri-apps/api/event";
   import { invoke } from "@tauri-apps/api/core";
   import { goto } from "$app/navigation";
-  import { workspaces, activeWorkspaceId } from "$lib/stores/workspace";
+  import { workspaces, activeWorkspaceId, launchStatus } from "$lib/stores/workspace";
   import OverviewTab from "$lib/components/OverviewTab.svelte";
   import ModsTab from "$lib/components/ModsTab.svelte";
   import ConfigTab from "$lib/components/ConfigTab.svelte";
@@ -13,8 +13,8 @@
   let ws = $state<any>(null);
   let fullCfg = $state<PackConfig | null>(null);
   let activeTab = $state<string>("overview");
-  let dlStage = $state<string>("");
-  let dlPct = $state<number>(0);
+  let dlCurrent = $state<number>(0);
+  let dlTotal = $state<number>(0);
   let downloading = $state(false);
   let gameLogs = $state<string[]>([]);
   let javaList = $state<JavaRuntime[]>([]);
@@ -34,8 +34,8 @@
 
     // Listen for download progress
     const unlisten = listen<any>("download-progress", (e) => {
-      dlStage = e.payload.stage || "";
-      dlPct = e.payload.progress || 0;
+      dlCurrent = Number(e.payload?.current ?? 0);
+      dlTotal = Number(e.payload?.total ?? 0);
     });
     const unlistenGame = listen<any>("game-status", (e) => {
       const state = e.payload?.state;
@@ -45,6 +45,7 @@
       } else if (state === "stderr" && message) {
         gameLogs = [`[stderr] ${String(message)}`, ...gameLogs].slice(0, 40);
       } else if (state === "stopped") {
+        launchStatus.set({ state: "idle" });
         gameLogs = ["[info] 游戏进程已结束", ...gameLogs].slice(0, 40);
       }
     });
@@ -54,14 +55,12 @@
   async function handleDownloadMc() {
     if (!ws || downloading) return;
     downloading = true;
-    dlStage = "准备下载...";
-    dlPct = 0;
+    dlCurrent = 0;
+    dlTotal = 0;
     try {
       await invoke("download_mc_version", { workspaceId: ws.id, mcVersion: ws.mc_version });
-      dlStage = "完成";
-      dlPct = 100;
     } catch (e: any) {
-      dlStage = "下载失败: " + e;
+      gameLogs = [`[error] 下载失败: ${String(e)}`, ...gameLogs].slice(0, 40);
     } finally {
       downloading = false;
     }
@@ -118,8 +117,7 @@
   {#if downloading}
     <div class="alert alert-info mb-4">
       <span class="loading loading-spinner loading-xs"></span>
-      <span>{dlStage} ({dlPct}%)</span>
-      <progress class="progress progress-primary w-1/3" value={dlPct} max="100"></progress>
+      <span>下载进度：{dlCurrent}/{dlTotal}</span>
     </div>
   {/if}
 
