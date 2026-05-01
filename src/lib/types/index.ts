@@ -52,3 +52,7 @@ export interface JavaRuntime {
   major_version?: number | null;
   created_at: string;
 }
+
+export interface AppSettings {
+  download_pool_size: number;
+}

@@ -1,9 +1,12 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use futures_util::{stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 use tauri::Emitter;
+
+use super::settings::load_settings;
 
 // ─── Version manifest (from launchermeta) ───
 
@@ -109,6 +112,14 @@ struct AssetObject {
     size: u64,
 }
 
+#[derive(Clone)]
+struct DownloadTask {
+    label: String,
+    url: String,
+    dest: PathBuf,
+    sha1: String,
+}
+
 fn resolve_download_path(entry: &DownloadEntry) -> Option<PathBuf> {
     entry.path.as_ref().filter(|p| !p.is_empty()).map(PathBuf::from)
 }
@@ -135,6 +146,22 @@ async fn download_file(url: &str, dest: &Path) -> Result<(), String> {
     std::fs::write(dest, &bytes)
         .map_err(|e| format!("写入文件失败: {}", e))?;
     Ok(())
+}
+
+async fn download_with_sha1(url: &str, dest: &Path, expected_sha1: &str) -> Result<(), String> {
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("创建目录失败: {e}"))?;
+    }
+    download_file(url, dest).await?;
+    if expected_sha1.trim().is_empty() {
+        return Ok(());
+    }
+    match file_matches_sha1(dest, expected_sha1) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err("SHA1 校验失败".into()),
+        Err(e) => Err(e),
+    }
 }
 
 fn compute_file_sha1(path: &Path) -> Result<String, String> {
@@ -171,47 +198,68 @@ fn should_download_with_sha1(path: &Path, expected_sha1: &str) -> Result<bool, S
     Ok(!file_matches_sha1(path, expected_sha1)?)
 }
 
-async fn download_asset_with_retry(
-    url: &str,
-    dest: &Path,
-    expected_size: u64,
-    expected_sha1: &str,
-    max_retries: u32,
-) -> Result<(), String> {
+async fn download_task_with_retry(task: DownloadTask, max_retries: u32) -> Result<(), String> {
     let mut last_err = String::new();
     for attempt in 1..=max_retries {
-        if let Err(e) = download_file(url, dest).await {
-            last_err = format!("尝试 {attempt}/{max_retries} 失败: {e}");
-            continue;
-        }
-        if !expected_sha1.is_empty() {
-            match file_matches_sha1(dest, expected_sha1) {
-                Ok(true) => return Ok(()),
-                Ok(false) => {
-                    last_err = format!("尝试 {attempt}/{max_retries} SHA1 校验失败");
-                    continue;
-                }
-                Err(e) => {
-                    last_err = format!("尝试 {attempt}/{max_retries} SHA1 校验失败: {e}");
-                    continue;
-                }
-            }
-        }
-        match std::fs::metadata(dest) {
-            Ok(meta) if meta.len() == expected_size => return Ok(()),
-            Ok(meta) => {
-                last_err = format!(
-                    "尝试 {attempt}/{max_retries} 文件大小不匹配，期望 {} 实际 {}",
-                    expected_size,
-                    meta.len()
-                );
-            }
+        match download_with_sha1(&task.url, &task.dest, &task.sha1).await {
+            Ok(()) => return Ok(()),
             Err(e) => {
-                last_err = format!("尝试 {attempt}/{max_retries} 校验文件失败: {e}");
+                last_err = format!("{} 尝试 {attempt}/{max_retries} 失败: {e}", task.label);
             }
         }
     }
     Err(last_err)
+}
+
+async fn execute_download_pool(
+    app: &tauri::AppHandle,
+    stage: &str,
+    tasks: Vec<DownloadTask>,
+    concurrency: usize,
+) -> Result<(), String> {
+    if tasks.is_empty() {
+        app.emit(
+            "download-progress",
+            serde_json::json!({"stage": stage, "progress": 100, "current": 0, "total": 0}),
+        )
+        .ok();
+        return Ok(());
+    }
+
+    let total = tasks.len();
+    let mut completed = 0usize;
+    let mut failed = Vec::new();
+    let mut pending = stream::iter(tasks.into_iter().map(|task| async move {
+        download_task_with_retry(task, 3).await
+    }))
+    .buffer_unordered(concurrency.max(1));
+
+    while let Some(result) = pending.next().await {
+        completed += 1;
+        let pct = (completed as f64 / total as f64 * 100.0) as u32;
+        app.emit(
+            "download-progress",
+            serde_json::json!({
+                "stage": stage,
+                "progress": pct,
+                "current": completed,
+                "total": total,
+            }),
+        )
+        .ok();
+
+        if let Err(e) = result {
+            failed.push(e);
+        }
+    }
+
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        let failed_count = failed.len();
+        let sample = failed.into_iter().take(6).collect::<Vec<_>>().join(" | ");
+        Err(format!("{stage} 失败，共 {failed_count} 项，示例: {sample}"))
+    }
 }
 
 // ─── Helper: download with progress events ───
@@ -311,6 +359,8 @@ pub async fn download_mc_version(
 ) -> Result<String, String> {
     let ver_dir = versions_dir(&workspace_id);
     std::fs::create_dir_all(&ver_dir).map_err(|e| format!("创建目录失败: {}", e))?;
+    let settings = load_settings().unwrap_or_default();
+    let download_pool_size = settings.download_pool_size.max(1);
 
     // 1. Fetch version manifest
     let manifest_url = "https://launchermeta.mojang.com/mc/game/version_manifest_v2.json";
@@ -374,15 +424,9 @@ pub async fn download_mc_version(
 
     let libs_dir = ver_dir.join("libraries");
     let current_os = detect_os();
-    let lib_count = version_json
-        .libraries
-        .iter()
-        .filter(|lib| evaluate_rules(&lib.rules, &current_os))
-        .count() as u64;
-    let mut downloaded_libs = 0u64;
+    let mut library_tasks = Vec::new();
 
     for lib in &version_json.libraries {
-        // Check rules (e.g. exclude based on OS)
         if !evaluate_rules(&lib.rules, &current_os) {
             continue;
         }
@@ -396,12 +440,12 @@ pub async fn download_mc_version(
             if let Some(rel_path) = resolve_download_path(artifact) {
                 let lib_path = libs_dir.join(rel_path);
                 if should_download_with_sha1(&lib_path, &artifact.sha1)? {
-                    if let Some(parent) = lib_path.parent() {
-                        std::fs::create_dir_all(parent)
-                            .map_err(|e| format!("创建库目录失败: {}", e))?;
-                    }
-                    download_file(&artifact.url, &lib_path).await
-                        .map_err(|e| format!("下载库 {} 失败: {}", lib.name, e))?;
+                    library_tasks.push(DownloadTask {
+                        label: format!("下载库 {}", lib.name),
+                        url: artifact.url.clone(),
+                        dest: lib_path,
+                        sha1: artifact.sha1.clone(),
+                    });
                 }
             }
         }
@@ -418,28 +462,18 @@ pub async fn download_mc_version(
                 if let Some(rel_path) = resolve_download_path(native_entry) {
                     let native_path = libs_dir.join(rel_path);
                     if should_download_with_sha1(&native_path, &native_entry.sha1)? {
-                        if let Some(parent) = native_path.parent() {
-                            std::fs::create_dir_all(parent)
-                                .map_err(|e| format!("创建 natives 目录失败: {}", e))?;
-                        }
-                        download_file(&native_entry.url, &native_path).await
-                            .map_err(|e| format!("下载 natives {} 失败: {}", lib.name, e))?;
+                        library_tasks.push(DownloadTask {
+                            label: format!("下载 natives {}", lib.name),
+                            url: native_entry.url.clone(),
+                            dest: native_path,
+                            sha1: native_entry.sha1.clone(),
+                        });
                     }
                 }
             }
         }
-
-        downloaded_libs += 1;
-        if lib_count > 0 {
-            let pct = (downloaded_libs as f64 / lib_count as f64 * 100.0) as u32;
-            app.emit("download-progress", serde_json::json!({"stage": "下载 libraries", "progress": pct, "current": downloaded_libs, "total": lib_count}))
-                .ok();
-        }
     }
-    if lib_count == 0 {
-        app.emit("download-progress", serde_json::json!({"stage": "下载 libraries", "progress": 100, "current": 0, "total": 0}))
-            .ok();
-    }
+    execute_download_pool(&app, "下载 libraries", library_tasks, download_pool_size).await?;
 
     // 8. Download assets
     app.emit("download-progress", serde_json::json!({"stage": "下载 assets", "progress": 0}))
@@ -460,9 +494,7 @@ pub async fn download_mc_version(
             .map_err(|e| format!("写入 assets index 失败: {}", e))?;
     }
 
-    let total_objects = asset_index.objects.len();
-    let mut downloaded_assets = 0u64;
-    let mut failed_assets: Vec<String> = Vec::new();
+    let mut asset_tasks = Vec::new();
 
     for (_, obj) in &asset_index.objects {
         let hash = &obj.hash;
@@ -471,34 +503,15 @@ pub async fn download_mc_version(
         let should_download = !file_matches_sha1(&asset_path, hash).unwrap_or(false);
 
         if should_download {
-            let url = format!("https://resources.download.minecraft.net/{}/{}", sub_dir, hash);
-            if let Some(parent) = asset_path.parent() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| format!("创建 asset 目录失败: {}", e))?;
-            }
-            if let Err(e) = download_asset_with_retry(&url, &asset_path, obj.size, hash, 3).await {
-                eprintln!("[mmpc] 下载 asset {} 失败: {}", hash, e);
-                failed_assets.push(hash.to_string());
-            }
-        }
-
-        downloaded_assets += 1;
-        if downloaded_assets % 50 == 0 || downloaded_assets == total_objects as u64 {
-            let pct = (downloaded_assets as f64 / total_objects as f64 * 100.0) as u32;
-            app.emit("download-progress", serde_json::json!({"stage": "下载 assets", "progress": pct, "current": downloaded_assets, "total": total_objects}))
-                .ok();
+            asset_tasks.push(DownloadTask {
+                label: format!("下载 asset {}", hash),
+                url: format!("https://resources.download.minecraft.net/{}/{}", sub_dir, hash),
+                dest: asset_path,
+                sha1: hash.clone(),
+            });
         }
     }
-
-    if !failed_assets.is_empty() {
-        let sample = failed_assets.iter().take(8).cloned().collect::<Vec<_>>().join(", ");
-        return Err(format!(
-            "assets 下载不完整，失败 {}/{}，示例哈希: {}",
-            failed_assets.len(),
-            total_objects,
-            sample
-        ));
-    }
+    execute_download_pool(&app, "下载 assets", asset_tasks, download_pool_size).await?;
 
     // 9. Create assets symlink in workspace versions dir (best effort)
     let ws_assets_link = ver_dir.join("assets");

@@ -1,6 +1,6 @@
 mod commands;
 
-use commands::{workspace, download, launch, java};
+use commands::{workspace, download, launch, java, settings};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -18,6 +18,8 @@ pub fn run() {
             java::detect_java_runtime,
             java::add_java_runtime,
             java::delete_java_runtime,
+            settings::get_settings,
+            settings::save_settings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
