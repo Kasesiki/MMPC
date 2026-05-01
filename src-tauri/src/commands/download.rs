@@ -136,6 +136,35 @@ async fn download_file(url: &str, dest: &Path) -> Result<(), String> {
     Ok(())
 }
 
+async fn download_asset_with_retry(
+    url: &str,
+    dest: &Path,
+    expected_size: u64,
+    max_retries: u32,
+) -> Result<(), String> {
+    let mut last_err = String::new();
+    for attempt in 1..=max_retries {
+        if let Err(e) = download_file(url, dest).await {
+            last_err = format!("尝试 {attempt}/{max_retries} 失败: {e}");
+            continue;
+        }
+        match std::fs::metadata(dest) {
+            Ok(meta) if meta.len() == expected_size => return Ok(()),
+            Ok(meta) => {
+                last_err = format!(
+                    "尝试 {attempt}/{max_retries} 文件大小不匹配，期望 {} 实际 {}",
+                    expected_size,
+                    meta.len()
+                );
+            }
+            Err(e) => {
+                last_err = format!("尝试 {attempt}/{max_retries} 校验文件失败: {e}");
+            }
+        }
+    }
+    Err(last_err)
+}
+
 // ─── Helper: download with progress events ───
 
 async fn download_file_with_progress(
@@ -372,21 +401,26 @@ pub async fn download_mc_version(
 
     let total_objects = asset_index.objects.len();
     let mut downloaded_assets = 0u64;
+    let mut failed_assets: Vec<String> = Vec::new();
 
     for (_, obj) in &asset_index.objects {
         let hash = &obj.hash;
         let sub_dir = &hash[..2];
         let asset_path = assets_base.join(sub_dir).join(hash);
+        let should_download = match std::fs::metadata(&asset_path) {
+            Ok(meta) => meta.len() != obj.size,
+            Err(_) => true,
+        };
 
-        if !asset_path.exists() {
+        if should_download {
             let url = format!("https://resources.download.minecraft.net/{}/{}", sub_dir, hash);
             if let Some(parent) = asset_path.parent() {
                 std::fs::create_dir_all(parent)
                     .map_err(|e| format!("创建 asset 目录失败: {}", e))?;
             }
-            // Silently skip failed asset downloads — missing a sound/texture shouldn't block launch
-            if let Err(e) = download_file(&url, &asset_path).await {
+            if let Err(e) = download_asset_with_retry(&url, &asset_path, obj.size, 3).await {
                 eprintln!("[mmpc] 下载 asset {} 失败: {}", hash, e);
+                failed_assets.push(hash.to_string());
             }
         }
 
@@ -396,6 +430,16 @@ pub async fn download_mc_version(
             app.emit("download-progress", serde_json::json!({"stage": "下载 assets", "progress": pct, "current": downloaded_assets, "total": total_objects}))
                 .ok();
         }
+    }
+
+    if !failed_assets.is_empty() {
+        let sample = failed_assets.iter().take(8).cloned().collect::<Vec<_>>().join(", ");
+        return Err(format!(
+            "assets 下载不完整，失败 {}/{}，示例哈希: {}",
+            failed_assets.len(),
+            total_objects,
+            sample
+        ));
     }
 
     // 9. Create assets symlink in workspace versions dir (best effort)
