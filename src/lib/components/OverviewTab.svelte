@@ -4,7 +4,6 @@ import { launchStatus } from "$lib/stores/workspace";
 
 let {
   workspace,
-  ondownloadmc,
   downloading = false,
   onconfigjava,
   javaLabel = "默认"
@@ -49,11 +48,6 @@ async function handleLaunch() {
         <div class="alert alert-error mt-4 max-w-md"><span>{status.message}</span></div>
       {/if}
       <div class="mt-4">
-        <button class="btn btn-outline btn-sm" onclick={ondownloadmc} disabled={downloading}>
-          {downloading ? "下载中..." : "下载/修复 MC 依赖"}
-        </button>
-      </div>
-      <div class="mt-2">
         <button class="btn btn-outline btn-sm" onclick={onconfigjava}>
           配置 Java（当前：{javaLabel}）
         </button>

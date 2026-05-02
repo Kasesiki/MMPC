@@ -15,6 +15,8 @@ export interface PackConfig {
   name: string;
   description: string;
   mc_version: McVersion;
+  loader_type?: string;
+  loader_version?: string | null;
   mods: string[];
   jvm_args: string[];
   java_runtime_id?: string | null;

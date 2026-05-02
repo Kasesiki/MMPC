@@ -5,6 +5,7 @@
 //! added via the [`Launcher`] trait.
 
 pub mod offline;
+pub mod version;
 
 use std::process::Command;
 

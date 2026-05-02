@@ -140,7 +140,6 @@
       <OverviewTab
         workspace={ws}
         fullConfig={fullCfg}
-        ondownloadmc={handleDownloadMc}
         onconfigjava={openJavaModal}
         javaLabel={currentJavaLabel()}
         downloading={downloading}

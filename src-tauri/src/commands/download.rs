@@ -7,6 +7,7 @@ use sha1::{Digest, Sha1};
 use tauri::Emitter;
 
 use super::settings::load_settings;
+use super::workspace::PackConfig;
 
 // ─── Version manifest (from launchermeta) ───
 
@@ -133,6 +134,42 @@ fn versions_dir(id: &str) -> std::path::PathBuf {
     get_mmpc_dir().join("workspaces").join(id).join("versions")
 }
 
+fn workspace_dir(id: &str) -> std::path::PathBuf {
+    get_mmpc_dir().join("workspaces").join(id)
+}
+
+fn pack_config_path(id: &str) -> PathBuf {
+    workspace_dir(id).join("pack.json")
+}
+
+fn merged_version_json_path(id: &str) -> PathBuf {
+    versions_dir(id).join("version.json")
+}
+
+fn read_pack_config(id: &str) -> Result<PackConfig, String> {
+    let content = std::fs::read_to_string(pack_config_path(id))
+        .map_err(|e| format!("读取 pack.json 失败: {e}"))?;
+    serde_json::from_str(&content)
+        .map_err(|e| format!("解析 pack.json 失败: {e}"))
+}
+
+fn emit_task_progress(
+    app: &tauri::AppHandle,
+    stage: &str,
+    current: usize,
+    total: usize,
+) -> Result<(), String> {
+    app.emit(
+        "download-progress",
+        serde_json::json!({
+            "stage": stage,
+            "current": current,
+            "total": total,
+        }),
+    )
+    .map_err(|e| format!("发送事件失败: {e}"))
+}
+
 // ─── Helper: simple file download ───
 
 async fn download_file(url: &str, dest: &Path) -> Result<(), String> {
@@ -218,11 +255,6 @@ async fn execute_download_pool(
     concurrency: usize,
 ) -> Result<(), String> {
     if tasks.is_empty() {
-        app.emit(
-            "download-progress",
-            serde_json::json!({"stage": stage, "progress": 100, "current": 0, "total": 0}),
-        )
-        .ok();
         return Ok(());
     }
 
@@ -236,17 +268,7 @@ async fn execute_download_pool(
 
     while let Some(result) = pending.next().await {
         completed += 1;
-        let pct = (completed as f64 / total as f64 * 100.0) as u32;
-        app.emit(
-            "download-progress",
-            serde_json::json!({
-                "stage": stage,
-                "progress": pct,
-                "current": completed,
-                "total": total,
-            }),
-        )
-        .ok();
+        emit_task_progress(app, stage, completed, total).ok();
 
         if let Err(e) = result {
             failed.push(e);
@@ -262,47 +284,18 @@ async fn execute_download_pool(
     }
 }
 
-// ─── Helper: download with progress events ───
-
-async fn download_file_with_progress(
+async fn download_single_task(
     app: &tauri::AppHandle,
     url: &str,
     dest: &Path,
     stage: &str,
+    expected_sha1: &str,
 ) -> Result<(), String> {
-    use futures_util::StreamExt;
-
-    let response = reqwest::get(url)
+    emit_task_progress(app, stage, 0, 1)?;
+    download_with_sha1(url, dest, expected_sha1)
         .await
-        .map_err(|e| format!("{} 请求失败: {}", stage, e))?;
-
-    let total_size = response.content_length().unwrap_or(0);
-    let mut downloaded: u64 = 0;
-    let mut buffer = Vec::new();
-    let mut stream = response.bytes_stream();
-
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| format!("{} 读取失败: {}", stage, e))?;
-        downloaded += chunk.len() as u64;
-        buffer.extend_from_slice(&chunk);
-
-        if total_size > 0 {
-            let pct = (downloaded as f64 / total_size as f64 * 100.0) as u32;
-            app.emit("download-progress", serde_json::json!({
-                "stage": stage,
-                "progress": pct,
-                "downloaded": downloaded,
-                "total": total_size,
-            })).ok();
-        }
-    }
-
-    if let Some(parent) = dest.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("创建目录失败: {}", e))?;
-    }
-    std::fs::write(dest, &buffer)
-        .map_err(|e| format!("{} 保存失败: {}", stage, e))?;
+        .map_err(|e| format!("{stage} 失败: {e}"))?;
+    emit_task_progress(app, stage, 1, 1)?;
     Ok(())
 }
 
@@ -351,18 +344,30 @@ fn get_native_classifier(current_os: &str) -> String {
     }
 }
 
-#[tauri::command]
-pub async fn download_mc_version(
-    app: tauri::AppHandle,
-    workspace_id: String,
-    mc_version: String,
-) -> Result<String, String> {
-    let ver_dir = versions_dir(&workspace_id);
-    std::fs::create_dir_all(&ver_dir).map_err(|e| format!("创建目录失败: {}", e))?;
-    let settings = load_settings().unwrap_or_default();
-    let download_pool_size = settings.download_pool_size.max(1);
+async fn resolve_workspace_version_metadata(
+    workspace_id: &str,
+    mc_version: &str,
+) -> Result<(VersionJson, serde_json::Value), String> {
+    let pack = read_pack_config(workspace_id)?;
+    let loader_type = pack.loader_type.trim().to_lowercase();
+    let version_json_path = merged_version_json_path(workspace_id);
+    if version_json_path.exists() {
+        let cached = std::fs::read_to_string(&version_json_path)
+            .map_err(|e| format!("读取缓存 version.json 失败: {e}"))?;
+        let cached_value: serde_json::Value = serde_json::from_str(&cached)
+            .map_err(|e| format!("解析缓存 version.json 失败: {e}"))?;
+        let version_json: VersionJson = serde_json::from_value(cached_value.clone())
+            .map_err(|e| format!("解析缓存启动元数据失败: {e}"))?;
+        return Ok((version_json, cached_value));
+    }
 
-    // 1. Fetch version manifest
+    if loader_type != "vanilla" {
+        return Err(format!(
+            "当前工作区使用 {}，但还没有缓存的 version.json。请先为该工作区写入对应 loader 的 version.json 缓存后再启动。",
+            loader_type
+        ));
+    }
+
     let manifest_url = "https://launchermeta.mojang.com/mc/game/version_manifest_v2.json";
     let manifest: VersionManifest = reqwest::get(manifest_url)
         .await
@@ -370,58 +375,67 @@ pub async fn download_mc_version(
         .json()
         .await
         .map_err(|e| format!("解析版本清单失败: {}", e))?;
-
-    // 2. Find matching version
     let entry = manifest.versions.iter()
         .find(|v| v.id == mc_version)
         .ok_or_else(|| format!("未找到 MC 版本 {}", mc_version))?;
 
-    // 3. Download version JSON
-    let version_json: VersionJson = reqwest::get(&entry.url)
+    let base_version_content = reqwest::get(&entry.url)
         .await
-        .map_err(|e| format!("获取版本 JSON 失败: {}", e))?
-        .json()
+        .map_err(|e| format!("下载原版 version.json 失败: {}", e))?
+        .text()
         .await
-        .map_err(|e| format!("解析版本 JSON 失败: {}", e))?;
+        .map_err(|e| format!("读取原版 version.json 失败: {}", e))?;
+    let base_value: serde_json::Value = serde_json::from_str(&base_version_content)
+        .map_err(|e| format!("解析原版 version.json 失败: {}", e))?;
+    let merged_content = serde_json::to_string_pretty(&base_value)
+        .map_err(|e| format!("序列化工作区 version.json 失败: {e}"))?;
+    std::fs::write(&version_json_path, &merged_content)
+        .map_err(|e| format!("写入工作区 version.json 失败: {e}"))?;
 
-    // 4. Save version JSON
-    let vjson_path = ver_dir.join("version.json");
-    let vjson_bytes = reqwest::get(&entry.url)
-        .await
-        .map_err(|e| format!("下载 version.json 失败: {}", e))?
-        .bytes()
-        .await
-        .map_err(|e| format!("读取 version.json 失败: {}", e))?;
-    std::fs::write(&vjson_path, &vjson_bytes)
-        .map_err(|e| format!("保存 version.json 失败: {}", e))?;
+    let version_json: VersionJson = serde_json::from_value(base_value.clone())
+        .map_err(|e| format!("解析工作区 version.json 失败: {}", e))?;
+    Ok((version_json, base_value))
+}
 
+#[tauri::command]
+pub async fn download_mc_version(
+    app: tauri::AppHandle,
+    workspace_id: String,
+    mc_version: String,
+) -> Result<String, String> {
+    ensure_workspace_runtime(&app, &workspace_id, &mc_version).await
+}
+
+pub async fn ensure_workspace_runtime(
+    app: &tauri::AppHandle,
+    workspace_id: &str,
+    mc_version: &str,
+) -> Result<String, String> {
+    let ver_dir = versions_dir(&workspace_id);
+    std::fs::create_dir_all(&ver_dir).map_err(|e| format!("创建目录失败: {}", e))?;
+    let settings = load_settings().unwrap_or_default();
+    let download_pool_size = settings.download_pool_size.max(1);
+
+    let (version_json, merged_version_json) = resolve_workspace_version_metadata(workspace_id, mc_version).await?;
     // 5. Download client.jar
-    app.emit("download-progress", serde_json::json!({"stage": "下载 client.jar", "progress": 0}))
-        .map_err(|e| format!("发送事件失败: {}", e))?;
-
     let client_url = &version_json.downloads.client.url;
     let client_path = ver_dir.join("client.jar");
     if should_download_with_sha1(&client_path, &version_json.downloads.client.sha1)? {
-        download_file_with_progress(&app, client_url, &client_path, "下载 client.jar").await?;
+        download_single_task(app, client_url, &client_path, "下载 client.jar", &version_json.downloads.client.sha1).await?;
     } else {
-        app.emit("download-progress", serde_json::json!({"stage": "下载 client.jar", "progress": 100}))
-            .ok();
+        emit_task_progress(app, "下载 client.jar", 1, 1).ok();
     }
 
     // 6. Download & extract asset index
     let asset_index_url = &version_json.asset_index.url;
     let ai_path = ver_dir.join("asset_index.json");
     if should_download_with_sha1(&ai_path, &version_json.asset_index.sha1)? {
-        download_file_with_progress(&app, asset_index_url, &ai_path, "下载 asset index").await?;
+        download_single_task(app, asset_index_url, &ai_path, "下载 asset index", &version_json.asset_index.sha1).await?;
     } else {
-        app.emit("download-progress", serde_json::json!({"stage": "下载 asset index", "progress": 100}))
-            .ok();
+        emit_task_progress(app, "下载 asset index", 1, 1).ok();
     }
 
     // 7. Download libraries
-    app.emit("download-progress", serde_json::json!({"stage": "下载 libraries", "progress": 0}))
-        .map_err(|e| format!("发送事件失败: {}", e))?;
-
     let libs_dir = ver_dir.join("libraries");
     let current_os = detect_os();
     let mut library_tasks = Vec::new();
@@ -476,9 +490,6 @@ pub async fn download_mc_version(
     execute_download_pool(&app, "下载 libraries", library_tasks, download_pool_size).await?;
 
     // 8. Download assets
-    app.emit("download-progress", serde_json::json!({"stage": "下载 assets", "progress": 0}))
-        .map_err(|e| format!("发送事件失败: {}", e))?;
-
     let assets_root = get_mmpc_dir().join("assets");
     let assets_indexes_dir = assets_root.join("indexes");
     let assets_base = assets_root.join("objects");
@@ -526,10 +537,10 @@ pub async fn download_mc_version(
         }
     }
 
-    app.emit("download-progress", serde_json::json!({"stage": "完成", "progress": 100}))
-        .ok();
+    emit_task_progress(app, "完成", 1, 1).ok();
 
-    Ok(format!("MC {} 数据下载完成（包含 libraries、assets）", mc_version))
+    let version_id = merged_version_json["id"].as_str().unwrap_or(mc_version);
+    Ok(format!("MC {} 数据校验完成（version: {}）", mc_version, version_id))
 }
 
 #[cfg(test)]

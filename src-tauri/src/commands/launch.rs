@@ -1,11 +1,13 @@
 use mc_launcher_core::auth::offline::OfflineUser;
 use mc_launcher_core::launch::offline::{LaunchConfig, OfflineLauncher};
+use mc_launcher_core::launch::version::parse_version_metadata;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use tauri::Emitter;
 use zip::read::ZipArchive;
 use super::java::resolve_java_path_by_id;
+use super::download::ensure_workspace_runtime;
 
 fn mm() -> PathBuf {
     let e = std::env::current_exe().unwrap_or_default();
@@ -187,6 +189,8 @@ pub async fn launch_game(
     let pk = ws.join("pack.json");
     let c = std::fs::read_to_string(&pk).map_err(|e| format!("read {e}"))?;
     let cfg: serde_json::Value = serde_json::from_str(&c).map_err(|e| format!("parse {e}"))?;
+    let mc_ver = cfg["mc_version"].as_str().unwrap_or("1.21").to_string();
+    let _ = ensure_workspace_runtime(&app, &workspace_id, &mc_ver).await?;
     let cj = ws.join("versions").join("client.jar");
     if !cj.exists() { return Err("no client.jar".into()); }
 
@@ -217,18 +221,20 @@ pub async fn launch_game(
     let jv = java_path
         .or(configured_java)
         .unwrap_or_else(|| "java".into());
-    let mc_ver = cfg["mc_version"].as_str().unwrap_or("1.21");
     let version_json_path = ws.join("versions").join("version.json");
-    let version_meta = std::fs::read_to_string(&version_json_path)
-        .ok()
-        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
+    let version_meta_raw = std::fs::read_to_string(&version_json_path)
+        .map_err(|e| format!("读取 version.json 失败: {e}"))?;
+    let version_meta = serde_json::from_str::<serde_json::Value>(&version_meta_raw)
+        .map_err(|e| format!("解析 version.json 失败: {e}"))?;
+    let parsed_version_metadata = parse_version_metadata(&version_meta_raw)
+        .map_err(|e| format!("解析启动元数据失败: {e}"))?;
     let asset_index_id = version_meta
-        .as_ref()
-        .and_then(|v| v["assetIndex"]["id"].as_str())
-        .unwrap_or(mc_ver);
+        ["assetIndex"]["id"]
+        .as_str()
+        .unwrap_or(&mc_ver);
     let main_class = version_meta
-        .as_ref()
-        .and_then(|v| v["mainClass"].as_str())
+        ["mainClass"]
+        .as_str()
         .unwrap_or("net.minecraft.client.main.Main");
     let mx = cfg["max_memory_mb"].as_u64().unwrap_or(4096);
     let mi = cfg["min_memory_mb"].as_u64().unwrap_or(1024);
@@ -244,6 +250,7 @@ pub async fn launch_game(
         .game_dir(ps(&ws)).assets_dir(ps(&assets_dir))
         .asset_index(asset_index_id)
         .max_mem(&format!("{mx}M")).min_mem(&format!("{mi}M"))
+        .version_metadata(parsed_version_metadata)
         .resolution(w, h);
     for a in &ja { b = b.add_jvm_arg(a); }
     // Add all library JARs to classpath

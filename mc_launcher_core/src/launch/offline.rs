@@ -26,6 +26,7 @@ use std::process::Command;
 use serde::{Deserialize, Serialize};
 
 use crate::auth::offline::OfflineUser;
+use crate::launch::version::{resolve_launch_arguments, LaunchArgumentContext, ResolvedLaunchArguments, VersionMetadata};
 
 /// Configuration for launching Minecraft (offline mode)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,6 +59,12 @@ pub struct LaunchConfig {
     pub width: Option<u32>,
     /// Custom resolution height
     pub height: Option<u32>,
+    /// Optional parsed version metadata for loader-aware launch
+    pub version_metadata: Option<VersionMetadata>,
+    /// Launcher display name used in placeholder expansion
+    pub launcher_name: String,
+    /// Launcher version used in placeholder expansion
+    pub launcher_version: String,
 }
 
 impl LaunchConfig {
@@ -84,6 +91,9 @@ pub struct LaunchConfigBuilder {
     demo: bool,
     width: Option<u32>,
     height: Option<u32>,
+    version_metadata: Option<VersionMetadata>,
+    launcher_name: Option<String>,
+    launcher_version: Option<String>,
 }
 
 impl LaunchConfigBuilder {
@@ -165,6 +175,24 @@ impl LaunchConfigBuilder {
         self
     }
 
+    /// Attach cached version metadata for loader-aware launch
+    pub fn version_metadata(mut self, metadata: VersionMetadata) -> Self {
+        self.version_metadata = Some(metadata);
+        self
+    }
+
+    /// Set launcher name used in placeholders
+    pub fn launcher_name(mut self, name: impl Into<String>) -> Self {
+        self.launcher_name = Some(name.into());
+        self
+    }
+
+    /// Set launcher version used in placeholders
+    pub fn launcher_version(mut self, version: impl Into<String>) -> Self {
+        self.launcher_version = Some(version.into());
+        self
+    }
+
     /// Set custom window resolution
     pub fn resolution(mut self, width: u32, height: u32) -> Self {
         self.width = Some(width);
@@ -211,6 +239,9 @@ impl LaunchConfigBuilder {
             demo: self.demo,
             width: self.width,
             height: self.height,
+            version_metadata: self.version_metadata,
+            launcher_name: self.launcher_name.unwrap_or_else(|| "mmpc".into()),
+            launcher_version: self.launcher_version.unwrap_or_else(|| env!("CARGO_PKG_VERSION").into()),
         })
     }
 }
@@ -227,6 +258,14 @@ impl OfflineLauncher {
     /// stdout/stderr, environment, working directory, etc.
     pub fn build_command(&self, config: &LaunchConfig, user: &OfflineUser) -> Command {
         let mut cmd = Command::new(&config.java_path);
+        let separator = if cfg!(windows) { ";" } else { ":" };
+        let mut cp_entries = config.classpath.iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+        cp_entries.push(config.minecraft_jar.to_string_lossy().to_string());
+        let classpath = cp_entries.join(separator);
+
+        let resolved = resolve_loader_aware_arguments(config, user, &classpath, separator);
 
         // --- JVM arguments ---
 
@@ -236,51 +275,105 @@ impl OfflineLauncher {
             cmd.arg(format!("-Xms{}", min));
         }
 
-        // Minecraft required JVM flags
-        cmd.arg("-Djava.library.path=natives");
-        cmd.arg("-Dminecraft.applet.WrapperClass=net.minecraft.client.Minecraft");
-        cmd.arg("-cp");
+        if let Some(arguments) = resolved {
+            for arg in arguments.jvm_args {
+                cmd.arg(arg);
+            }
+            for arg in &config.jvm_args {
+                cmd.arg(arg);
+            }
+            cmd.arg(arguments.main_class);
+            for arg in arguments.game_args {
+                cmd.arg(arg);
+            }
+        } else {
+            // Minecraft required JVM flags
+            cmd.arg("-Djava.library.path=natives");
+            cmd.arg("-Dminecraft.applet.WrapperClass=net.minecraft.client.Minecraft");
+            cmd.arg("-cp");
+            cmd.arg(classpath);
 
-        // Build classpath string
-        let separator = if cfg!(windows) { ";" } else { ":" };
-        let mut cp = config.classpath.iter()
-            .map(|p| p.to_string_lossy().to_string())
-            .collect::<Vec<_>>();
-        cp.push(config.minecraft_jar.to_string_lossy().to_string());
-        cmd.arg(cp.join(separator));
+            // Custom JVM args
+            for arg in &config.jvm_args {
+                cmd.arg(arg);
+            }
 
-        // Custom JVM args
-        for arg in &config.jvm_args {
-            cmd.arg(arg);
-        }
+            // --- Game arguments ---
+            cmd.arg(&config.main_class);
 
-        // --- Game arguments ---
-        cmd.arg(&config.main_class);
+            cmd.arg("--username").arg(&user.username);
+            cmd.arg("--uuid").arg(user.uuid.to_string());
+            cmd.arg("--accessToken").arg(&user.access_token);
+            cmd.arg("--version").arg(&config.asset_index);
+            cmd.arg("--gameDir").arg(config.game_dir.to_string_lossy().as_ref());
+            cmd.arg("--assetsDir").arg(config.assets_dir.to_string_lossy().as_ref());
+            cmd.arg("--assetIndex").arg(&config.asset_index);
 
-        cmd.arg("--username").arg(&user.username);
-        cmd.arg("--uuid").arg(user.uuid.to_string());
-        cmd.arg("--accessToken").arg(&user.access_token);
-        cmd.arg("--version").arg(&config.asset_index);
-        cmd.arg("--gameDir").arg(config.game_dir.to_string_lossy().as_ref());
-        cmd.arg("--assetsDir").arg(config.assets_dir.to_string_lossy().as_ref());
-        cmd.arg("--assetIndex").arg(&config.asset_index);
+            if config.demo {
+                cmd.arg("--demo");
+            }
 
-        if config.demo {
-            cmd.arg("--demo");
-        }
+            if let (Some(w), Some(h)) = (config.width, config.height) {
+                cmd.arg("--width").arg(w.to_string());
+                cmd.arg("--height").arg(h.to_string());
+            }
 
-        if let (Some(w), Some(h)) = (config.width, config.height) {
-            cmd.arg("--width").arg(w.to_string());
-            cmd.arg("--height").arg(h.to_string());
-        }
-
-        // Custom game args
-        for arg in &config.game_args {
-            cmd.arg(arg);
+            // Custom game args
+            for arg in &config.game_args {
+                cmd.arg(arg);
+            }
         }
 
         cmd
     }
+}
+
+fn resolve_loader_aware_arguments(
+    config: &LaunchConfig,
+    user: &OfflineUser,
+    classpath: &str,
+    classpath_separator: &str,
+) -> Option<ResolvedLaunchArguments> {
+    let metadata = config.version_metadata.as_ref()?;
+    let natives_directory = config.game_dir.join("natives");
+    let mut resolved = resolve_launch_arguments(
+        metadata,
+        &LaunchArgumentContext {
+            auth_player_name: user.username.clone(),
+            auth_uuid: user.uuid.to_string(),
+            auth_access_token: user.access_token.clone(),
+            version_name: metadata.id.clone(),
+            game_directory: config.game_dir.to_string_lossy().to_string(),
+            assets_root: config.assets_dir.to_string_lossy().to_string(),
+            assets_index_name: config.asset_index.clone(),
+            user_type: "legacy".into(),
+            version_type: "release".into(),
+            natives_directory: natives_directory.to_string_lossy().to_string(),
+            launcher_name: config.launcher_name.clone(),
+            launcher_version: config.launcher_version.clone(),
+            classpath: classpath.to_string(),
+            classpath_separator: classpath_separator.to_string(),
+        },
+    )
+    .ok()?;
+
+    if !config.jvm_args.is_empty() {
+        resolved.jvm_args.extend(config.jvm_args.clone());
+    }
+    if config.demo {
+        resolved.game_args.push("--demo".into());
+    }
+    if let (Some(w), Some(h)) = (config.width, config.height) {
+        resolved.game_args.push("--width".into());
+        resolved.game_args.push(w.to_string());
+        resolved.game_args.push("--height".into());
+        resolved.game_args.push(h.to_string());
+    }
+    if !config.game_args.is_empty() {
+        resolved.game_args.extend(config.game_args.clone());
+    }
+
+    Some(resolved)
 }
 
 impl super::Launcher for OfflineLauncher {

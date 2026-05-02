@@ -14,6 +14,10 @@ pub struct PackConfig {
     pub id: String,
     pub name: String,
     pub mc_version: String,
+    #[serde(default)]
+    pub loader_type: String,
+    #[serde(default)]
+    pub loader_version: Option<String>,
     pub description: String,
     pub mods: Vec<String>,
     pub jvm_args: Vec<String>,
@@ -138,6 +142,8 @@ pub fn create_workspace(name: String, mc_version: String, description: String) -
         id: id.clone(),
         name,
         mc_version,
+        loader_type: "vanilla".into(),
+        loader_version: None,
         description,
         mods: vec![],
         jvm_args: vec![],

@@ -49,6 +49,36 @@
       </select>
     </div>
 
+    <div class="grid grid-cols-2 gap-4">
+      <div>
+        <label class="label" for="cfg-loader-type">
+          <span class="label-text">加载器类型</span>
+        </label>
+        <select
+          id="cfg-loader-type"
+          class="select select-bordered w-full"
+          bind:value={workspace.config.loader_type}
+        >
+          <option value="vanilla">Vanilla</option>
+          <option value="fabric">Fabric</option>
+          <option value="forge">Forge</option>
+        </select>
+      </div>
+      <div>
+        <label class="label" for="cfg-loader-version">
+          <span class="label-text">加载器版本</span>
+        </label>
+        <input
+          id="cfg-loader-version"
+          type="text"
+          class="input input-bordered w-full"
+          placeholder="如 0.16.10 / 47.3.0"
+          bind:value={workspace.config.loader_version}
+          disabled={workspace.config.loader_type === "vanilla"}
+        />
+      </div>
+    </div>
+
     <!-- Description -->
     <div>
       <label class="label" for="cfg-desc">
