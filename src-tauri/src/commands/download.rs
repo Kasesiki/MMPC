@@ -9,32 +9,7 @@ use tauri::Emitter;
 use zip::read::ZipArchive;
 
 use super::settings::load_settings;
-use super::workspace::PackConfig;
-
-// ─── Version manifest (from launchermeta) ───
-
-#[derive(Debug, Serialize, Deserialize)]
-struct VersionManifest {
-    latest: Latest,
-    versions: Vec<VersionEntry>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct Latest {
-    release: String,
-    snapshot: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct VersionEntry {
-    id: String,
-    #[serde(rename = "type")]
-    version_type: String,
-    url: String,
-    time: String,
-    #[serde(rename = "releaseTime")]
-    release_time: String,
-}
+use super::workspace::{find_version_manifest_entry, PackConfig};
 
 // ─── Version JSON (per-version metadata) ───
 
@@ -299,18 +274,7 @@ fn merge_version_json(parent: &serde_json::Value, child: &serde_json::Value) -> 
 }
 
 async fn fetch_vanilla_version_value(mc_version: &str) -> Result<serde_json::Value, String> {
-    let manifest_url = "https://launchermeta.mojang.com/mc/game/version_manifest_v2.json";
-    let manifest: VersionManifest = reqwest::get(manifest_url)
-        .await
-        .map_err(|e| format!("获取版本清单失败: {}", e))?
-        .json()
-        .await
-        .map_err(|e| format!("解析版本清单失败: {}", e))?;
-    let entry = manifest
-        .versions
-        .iter()
-        .find(|v| v.id == mc_version)
-        .ok_or_else(|| format!("未找到 MC 版本 {}", mc_version))?;
+    let entry = find_version_manifest_entry(mc_version).await?;
     fetch_json_value(&entry.url, "下载原版 version.json").await
 }
 
@@ -834,17 +798,15 @@ pub async fn ensure_workspace_runtime(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::workspace::get_cached_version_manifest;
 
     /// Test that the version manifest can be fetched and parsed
     #[tokio::test]
     async fn test_fetch_manifest() {
-        let url = "https://launchermeta.mojang.com/mc/game/version_manifest_v2.json";
-        let resp = reqwest::get(url).await.expect("HTTP request failed");
-        assert!(resp.status().is_success(), "HTTP {}", resp.status());
-
-        let manifest: VersionManifest = resp.json().await.expect("Deserialize manifest");
+        let manifest = get_cached_version_manifest()
+            .await
+            .expect("manifest request");
         assert!(!manifest.versions.is_empty(), "No versions in manifest");
-        assert!(!manifest.latest.release.is_empty());
 
         // Verify 1.21 exists
         let v121 = manifest.versions.iter().find(|v| v.id == "1.21");
@@ -856,13 +818,9 @@ mod tests {
     #[tokio::test]
     async fn test_fetch_version_json() {
         // First get manifest to find the URL
-        let manifest: VersionManifest =
-            reqwest::get("https://launchermeta.mojang.com/mc/game/version_manifest_v2.json")
-                .await
-                .expect("manifest request")
-                .json()
-                .await
-                .expect("manifest parse");
+        let manifest = get_cached_version_manifest()
+            .await
+            .expect("manifest request");
 
         let entry = manifest
             .versions
@@ -887,13 +845,9 @@ mod tests {
     /// Test that a snapshot version also works
     #[tokio::test]
     async fn test_fetch_snapshot() {
-        let manifest: VersionManifest =
-            reqwest::get("https://launchermeta.mojang.com/mc/game/version_manifest_v2.json")
-                .await
-                .expect("manifest request")
-                .json()
-                .await
-                .expect("manifest parse");
+        let manifest = get_cached_version_manifest()
+            .await
+            .expect("manifest request");
 
         // Find a snapshot version
         let snapshot = manifest

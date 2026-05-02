@@ -1,27 +1,90 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { loadWorkspaces, createWorkspaceOnDisk, deleteWorkspaceOnDisk } from "$lib/stores/workspace";
+  import {
+    loadWorkspaces,
+    createWorkspaceOnDisk,
+    deleteWorkspaceOnDisk,
+    listReleaseVersions,
+    listFabricLoaderVersions
+  } from "$lib/stores/workspace";
   import { workspaces } from "$lib/stores/workspace";
   import { goto } from "$app/navigation";
+  import type { FabricLoaderVersion } from "$lib/types";
+
+  const fallbackReleaseVersions = ["1.21", "1.20.6", "1.20.4", "1.20.1", "1.19.4", "1.18.2", "1.16.5", "1.12.2"];
 
   let wsList = $state<any[]>([]);
   let loading = $state(true);
+  let loadingVersions = $state(true);
   let showNewModal = $state(false);
   let newName = $state("");
   let newMcVersion = $state("1.21");
+  let newLoaderType = $state("vanilla");
+  let newLoaderVersion = $state("");
   let newDesc = $state("");
   let creating = $state(false);
+  let releaseVersions = $state<string[]>([...fallbackReleaseVersions]);
+  let fabricLoaderVersions = $state<FabricLoaderVersion[]>([]);
+  let loadingFabricVersions = $state(false);
 
-  onMount(() => { loadWorkspaces().then(() => { loading = false; }); });
+  onMount(async () => {
+    const [versions] = await Promise.all([
+      listReleaseVersions(),
+      loadWorkspaces().then(() => {
+        loading = false;
+      })
+    ]);
+    if (versions.length > 0) {
+      releaseVersions = versions;
+      if (!versions.includes(newMcVersion)) {
+        newMcVersion = versions[0];
+      }
+    }
+    loadingVersions = false;
+  });
   $effect(() => { wsList = $workspaces; });
+
+  $effect(() => {
+    if (newLoaderType !== "fabric") {
+      fabricLoaderVersions = [];
+      if (newLoaderType === "vanilla") {
+        newLoaderVersion = "";
+      }
+      return;
+    }
+
+    loadingFabricVersions = true;
+    listFabricLoaderVersions(newMcVersion)
+      .then((versions) => {
+        fabricLoaderVersions = versions;
+        const stable = versions.find((entry) => entry.stable);
+        const fallback = versions[0];
+        const nextVersion = stable?.version ?? fallback?.version ?? "";
+        if (!versions.some((entry) => entry.version === newLoaderVersion)) {
+          newLoaderVersion = nextVersion;
+        }
+      })
+      .finally(() => {
+        loadingFabricVersions = false;
+      });
+  });
 
   async function handleCreate() {
     if (!newName.trim() || creating) return;
     creating = true;
-    const ws = await createWorkspaceOnDisk(newName.trim(), newMcVersion, newDesc);
+    const ws = await createWorkspaceOnDisk(
+      newName.trim(),
+      newMcVersion,
+      newDesc,
+      newLoaderType,
+      newLoaderType === "vanilla" ? null : newLoaderVersion.trim() || null
+    );
     creating = false;
     showNewModal = false;
-    newName = ""; newDesc = "";
+    newName = "";
+    newLoaderType = "vanilla";
+    newLoaderVersion = "";
+    newDesc = "";
     if (ws) goto(`/workspace/${ws.id}`);
   }
 
@@ -85,9 +148,52 @@
         <div>
           <label class="label" for="ws-mc"><span class="label-text">MC 版本</span></label>
           <select id="ws-mc" class="select select-bordered w-full" bind:value={newMcVersion}>
-            <option>1.21</option><option>1.20.4</option><option>1.20.1</option>
-            <option>1.19.4</option><option>1.18.2</option><option>1.16.5</option><option>1.12.2</option>
+            {#each releaseVersions as version}
+              <option value={version}>{version}</option>
+            {/each}
           </select>
+          {#if loadingVersions}
+            <p class="text-xs text-base-content/50 mt-2">正在从 Mojang 官方加载正式版版本列表...</p>
+          {/if}
+        </div>
+        <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <div>
+            <label class="label" for="ws-loader-type"><span class="label-text">Loader</span></label>
+            <select id="ws-loader-type" class="select select-bordered w-full" bind:value={newLoaderType}>
+              <option value="vanilla">Vanilla</option>
+              <option value="fabric">Fabric</option>
+              <option value="forge">Forge</option>
+            </select>
+          </div>
+          <div>
+            <label class="label" for="ws-loader-version"><span class="label-text">Loader 版本</span></label>
+            {#if newLoaderType === "fabric"}
+              <select
+                id="ws-loader-version"
+                class="select select-bordered w-full"
+                bind:value={newLoaderVersion}
+                disabled={loadingFabricVersions || fabricLoaderVersions.length === 0}
+              >
+                {#each fabricLoaderVersions as loader}
+                  <option value={loader.version}>
+                    {loader.version}{loader.stable ? " · stable" : ""}
+                  </option>
+                {/each}
+              </select>
+              {#if loadingFabricVersions}
+                <p class="text-xs text-base-content/50 mt-2">正在加载 Fabric 版本列表...</p>
+              {/if}
+            {:else}
+              <input
+                id="ws-loader-version"
+                type="text"
+                class="input input-bordered w-full"
+                placeholder="如 47.3.0"
+                bind:value={newLoaderVersion}
+                disabled={newLoaderType === "vanilla"}
+              />
+            {/if}
+          </div>
         </div>
         <div>
           <label class="label" for="ws-desc"><span class="label-text">描述</span></label>
@@ -96,7 +202,11 @@
       </div>
       <div class="modal-action">
         <button class="btn btn-ghost" onclick={() => showNewModal = false}>取消</button>
-        <button class="btn btn-primary" onclick={handleCreate} disabled={!newName.trim() || creating}>
+        <button
+          class="btn btn-primary"
+          onclick={handleCreate}
+          disabled={!newName.trim() || creating || (newLoaderType !== "vanilla" && !newLoaderVersion.trim())}
+        >
           {creating ? "创建中..." : "创建"}
         </button>
       </div>

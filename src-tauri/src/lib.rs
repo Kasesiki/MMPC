@@ -1,6 +1,6 @@
 mod commands;
 
-use commands::{workspace, download, launch, java, settings};
+use commands::{download, java, launch, settings, workspace};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -8,6 +8,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             workspace::list_workspaces,
+            workspace::list_release_versions,
+            workspace::list_fabric_loader_versions,
             workspace::create_workspace,
             workspace::delete_workspace,
             workspace::save_pack_config,

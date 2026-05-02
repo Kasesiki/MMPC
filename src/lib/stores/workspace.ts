@@ -1,6 +1,6 @@
 import { writable, derived } from "svelte/store";
 import { invoke } from "@tauri-apps/api/core";
-import type { Workspace, LaunchStatus } from "$lib/types";
+import type { Workspace, LaunchStatus, FabricLoaderVersion } from "$lib/types";
 
 export const workspaces = writable<Workspace[]>([]);
 export const activeWorkspaceId = writable<string | null>(null);
@@ -23,12 +23,16 @@ export async function createWorkspaceOnDisk(
   name: string,
   mcVersion: string,
   description: string,
+  loaderType: string,
+  loaderVersion: string | null,
 ): Promise<Workspace | null> {
   try {
     const ws: Workspace = await invoke("create_workspace", {
       name,
       mcVersion,
       description,
+      loaderType,
+      loaderVersion,
     });
     workspaces.update((list) => [ws, ...list]);
     return ws;
@@ -55,5 +59,27 @@ export async function savePackConfig(
     await invoke("save_pack_config", { id, config });
   } catch (e) {
     console.error("保存配置失败", e);
+  }
+}
+
+export async function listReleaseVersions(): Promise<string[]> {
+  try {
+    return await invoke<string[]>("list_release_versions");
+  } catch (e) {
+    console.error("加载 MC 版本列表失败", e);
+    return [];
+  }
+}
+
+export async function listFabricLoaderVersions(
+  mcVersion: string,
+): Promise<FabricLoaderVersion[]> {
+  try {
+    return await invoke<FabricLoaderVersion[]>("list_fabric_loader_versions", {
+      mcVersion,
+    });
+  } catch (e) {
+    console.error("加载 Fabric 版本列表失败", e);
+    return [];
   }
 }

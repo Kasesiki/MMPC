@@ -3,11 +3,14 @@
   import { listen } from "@tauri-apps/api/event";
   import { invoke } from "@tauri-apps/api/core";
   import { goto } from "$app/navigation";
+  import { listReleaseVersions, savePackConfig } from "$lib/stores/workspace";
   import { workspaces, activeWorkspaceId, launchStatus } from "$lib/stores/workspace";
   import OverviewTab from "$lib/components/OverviewTab.svelte";
   import ModsTab from "$lib/components/ModsTab.svelte";
   import ConfigTab from "$lib/components/ConfigTab.svelte";
   import type { Workspace, PackConfig, JavaRuntime } from "$lib/types";
+
+  const fallbackReleaseVersions = ["1.21", "1.20.6", "1.20.4", "1.20.1", "1.19.4", "1.18.2", "1.16.5", "1.12.2"];
 
   let { params } = $props();
   let ws = $state<any>(null);
@@ -22,6 +25,9 @@
   let javaSaving = $state(false);
   let selectedJavaId = $state<string>("");
   let javaErr = $state("");
+  let releaseVersions = $state<string[]>([...fallbackReleaseVersions]);
+  let configSaving = $state(false);
+  let configError = $state("");
 
   onMount(() => {
     const id = params.id;
@@ -31,6 +37,11 @@
     // Load full config
     invoke("get_pack_config", { id }).then((cfg: any) => { fullCfg = cfg; }).catch(() => {});
     invoke<JavaRuntime[]>("list_java_runtimes").then((list) => { javaList = list; }).catch(() => {});
+    listReleaseVersions().then((versions) => {
+      if (versions.length > 0) {
+        releaseVersions = versions;
+      }
+    }).catch(() => {});
 
     // Listen for download progress
     const unlisten = listen<any>("download-progress", (e) => {
@@ -100,6 +111,24 @@
     }
   }
 
+  async function saveWorkspaceConfig(nextCfg: PackConfig) {
+    if (!ws || configSaving) return;
+    configSaving = true;
+    configError = "";
+    try {
+      await savePackConfig(ws.id, nextCfg as unknown as Record<string, unknown>);
+      fullCfg = nextCfg;
+      await invoke("get_pack_config", { id: ws.id }).then((cfg: any) => { fullCfg = cfg; });
+      await invoke<Workspace[]>("list_workspaces").then((list) => {
+        workspaces.set(list);
+      });
+    } catch (e: any) {
+      configError = String(e);
+    } finally {
+      configSaving = false;
+    }
+  }
+
   function goBack() { activeWorkspaceId.set(null); goto("/"); }
 </script>
 
@@ -130,6 +159,12 @@
     </div>
   {/if}
 
+  {#if configError}
+    <div class="alert alert-error mb-4">
+      <span>{configError}</span>
+    </div>
+  {/if}
+
   {#if ws && fullCfg}
     <div role="tablist" class="tabs tabs-bordered mb-6">
       <button role="tab" class="tab tab-lg {activeTab === 'overview' ? 'tab-active' : ''}" onclick={() => activeTab = 'overview'}>概览</button>
@@ -147,7 +182,12 @@
     {:else if activeTab === 'mods'}
       <ModsTab workspace={ws} />
     {:else if activeTab === 'config'}
-      <ConfigTab workspace={ws} />
+      <ConfigTab
+        workspace={ws}
+        config={fullCfg}
+        releaseVersions={releaseVersions}
+        onsave={saveWorkspaceConfig}
+      />
     {/if}
   {:else if ws && !fullCfg}
     <div class="flex justify-center py-12"><span class="loading loading-spinner loading-md"></span><span class="ml-2">加载配置中...</span></div>

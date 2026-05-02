@@ -75,7 +75,8 @@ fn load_runtimes() -> Result<Vec<JavaRuntime>, String> {
         return Ok(vec![]);
     }
     let content = fs::read_to_string(&path).map_err(|e| format!("读取 Java 列表失败: {e}"))?;
-    serde_json::from_str::<Vec<JavaRuntime>>(&content).map_err(|e| format!("解析 Java 列表失败: {e}"))
+    serde_json::from_str::<Vec<JavaRuntime>>(&content)
+        .map_err(|e| format!("解析 Java 列表失败: {e}"))
 }
 
 fn save_runtimes(list: &[JavaRuntime]) -> Result<(), String> {
@@ -83,7 +84,8 @@ fn save_runtimes(list: &[JavaRuntime]) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("创建 Java 目录失败: {e}"))?;
     }
-    let json = serde_json::to_string_pretty(list).map_err(|e| format!("序列化 Java 列表失败: {e}"))?;
+    let json =
+        serde_json::to_string_pretty(list).map_err(|e| format!("序列化 Java 列表失败: {e}"))?;
     fs::write(path, json).map_err(|e| format!("写入 Java 列表失败: {e}"))
 }
 

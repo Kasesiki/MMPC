@@ -1,5 +1,5 @@
-pub mod workspace;
 pub mod download;
-pub mod launch;
 pub mod java;
+pub mod launch;
 pub mod settings;
+pub mod workspace;
