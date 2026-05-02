@@ -5,11 +5,13 @@
     createWorkspaceOnDisk,
     deleteWorkspaceOnDisk,
     listReleaseVersions,
-    listFabricLoaderVersions
+    listFabricLoaderVersions,
+    listForgeLoaderVersions,
+    listNeoForgeLoaderVersions
   } from "$lib/stores/workspace";
   import { workspaces } from "$lib/stores/workspace";
   import { goto } from "$app/navigation";
-  import type { FabricLoaderVersion } from "$lib/types";
+  import type { LoaderVersionOption } from "$lib/types";
 
   const fallbackReleaseVersions = ["1.21", "1.20.6", "1.20.4", "1.20.1", "1.19.4", "1.18.2", "1.16.5", "1.12.2"];
 
@@ -24,8 +26,8 @@
   let newDesc = $state("");
   let creating = $state(false);
   let releaseVersions = $state<string[]>([...fallbackReleaseVersions]);
-  let fabricLoaderVersions = $state<FabricLoaderVersion[]>([]);
-  let loadingFabricVersions = $state(false);
+  let loaderVersions = $state<LoaderVersionOption[]>([]);
+  let loadingLoaderVersions = $state(false);
 
   onMount(async () => {
     const [versions] = await Promise.all([
@@ -45,18 +47,23 @@
   $effect(() => { wsList = $workspaces; });
 
   $effect(() => {
-    if (newLoaderType !== "fabric") {
-      fabricLoaderVersions = [];
-      if (newLoaderType === "vanilla") {
-        newLoaderVersion = "";
-      }
+    if (newLoaderType === "vanilla") {
+      loaderVersions = [];
+      newLoaderVersion = "";
       return;
     }
 
-    loadingFabricVersions = true;
-    listFabricLoaderVersions(newMcVersion)
+    loadingLoaderVersions = true;
+    const loaderPromise =
+      newLoaderType === "fabric"
+        ? listFabricLoaderVersions(newMcVersion)
+        : newLoaderType === "forge"
+          ? listForgeLoaderVersions(newMcVersion)
+          : listNeoForgeLoaderVersions(newMcVersion);
+
+    loaderPromise
       .then((versions) => {
-        fabricLoaderVersions = versions;
+        loaderVersions = versions;
         const stable = versions.find((entry) => entry.stable);
         const fallback = versions[0];
         const nextVersion = stable?.version ?? fallback?.version ?? "";
@@ -65,9 +72,16 @@
         }
       })
       .finally(() => {
-        loadingFabricVersions = false;
+        loadingLoaderVersions = false;
       });
   });
+
+  function loaderVersionPlaceholder() {
+    if (newLoaderType === "forge") return "选择 Forge 版本";
+    if (newLoaderType === "neoforge") return "选择 NeoForge 版本";
+    if (newLoaderType === "fabric") return "选择 Fabric 版本";
+    return "";
+  }
 
   async function handleCreate() {
     if (!newName.trim() || creating) return;
@@ -163,32 +177,33 @@
               <option value="vanilla">Vanilla</option>
               <option value="fabric">Fabric</option>
               <option value="forge">Forge</option>
+              <option value="neoforge">NeoForge</option>
             </select>
           </div>
           <div>
             <label class="label" for="ws-loader-version"><span class="label-text">Loader 版本</span></label>
-            {#if newLoaderType === "fabric"}
+            {#if newLoaderType !== "vanilla"}
               <select
                 id="ws-loader-version"
                 class="select select-bordered w-full"
                 bind:value={newLoaderVersion}
-                disabled={loadingFabricVersions || fabricLoaderVersions.length === 0}
+                disabled={loadingLoaderVersions || loaderVersions.length === 0}
               >
-                {#each fabricLoaderVersions as loader}
+                {#each loaderVersions as loader}
                   <option value={loader.version}>
                     {loader.version}{loader.stable ? " · stable" : ""}
                   </option>
                 {/each}
               </select>
-              {#if loadingFabricVersions}
-                <p class="text-xs text-base-content/50 mt-2">正在加载 Fabric 版本列表...</p>
+              {#if loadingLoaderVersions}
+                <p class="text-xs text-base-content/50 mt-2">正在加载 {loaderVersionPlaceholder()}...</p>
               {/if}
             {:else}
               <input
                 id="ws-loader-version"
                 type="text"
                 class="input input-bordered w-full"
-                placeholder="如 47.3.0"
+                placeholder=""
                 bind:value={newLoaderVersion}
                 disabled={newLoaderType === "vanilla"}
               />

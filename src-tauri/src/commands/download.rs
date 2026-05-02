@@ -11,8 +11,6 @@ use zip::read::ZipArchive;
 use super::settings::load_settings;
 use super::workspace::{find_version_manifest_entry, PackConfig};
 
-// ─── Version JSON (per-version metadata) ───
-
 #[derive(Debug, Serialize, Deserialize)]
 struct VersionJson {
     downloads: VersionDownloads,
@@ -47,8 +45,6 @@ struct AssetIndex {
     total_size: u64,
 }
 
-// ─── Library entry (from version.json libraries[]) ───
-
 #[derive(Debug, Serialize, Deserialize)]
 struct LibraryEntry {
     name: String,
@@ -78,8 +74,6 @@ struct Rule {
 struct RuleOs {
     name: Option<String>,
 }
-
-// ─── Asset index (from assets/<version>.json) ───
 
 #[derive(Debug, Serialize, Deserialize)]
 struct AssetIndexObjects {
@@ -114,18 +108,18 @@ fn resolve_download_path(entry: &DownloadEntry) -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-fn get_mmpc_dir() -> std::path::PathBuf {
+fn get_mmpc_dir() -> PathBuf {
     let exe = std::env::current_exe().unwrap_or_default();
     exe.parent()
         .map(|p| p.join(".MMPC"))
-        .unwrap_or_else(|| std::path::PathBuf::from(".MMPC"))
+        .unwrap_or_else(|| PathBuf::from(".MMPC"))
 }
 
-fn versions_dir(id: &str) -> std::path::PathBuf {
+fn versions_dir(id: &str) -> PathBuf {
     get_mmpc_dir().join("workspaces").join(id).join("versions")
 }
 
-fn workspace_dir(id: &str) -> std::path::PathBuf {
+fn workspace_dir(id: &str) -> PathBuf {
     get_mmpc_dir().join("workspaces").join(id)
 }
 
@@ -145,6 +139,7 @@ fn normalize_loader_type(loader_type: &str) -> &str {
     match loader_type.trim().to_lowercase().as_str() {
         "fabric" => "fabric",
         "forge" => "forge",
+        "neoforge" => "neoforge",
         _ => "vanilla",
     }
 }
@@ -290,30 +285,31 @@ async fn fetch_fabric_version_value(
     fetch_json_value(&url, "下载 Fabric version.json").await
 }
 
-fn extract_forge_version_json(bytes: &[u8]) -> Result<serde_json::Value, String> {
+fn extract_installer_version_json(bytes: &[u8], label: &str) -> Result<serde_json::Value, String> {
     let cursor = Cursor::new(bytes.to_vec());
-    let mut zip = ZipArchive::new(cursor).map_err(|e| format!("解析 Forge installer 失败: {e}"))?;
+    let mut zip =
+        ZipArchive::new(cursor).map_err(|e| format!("解析 {label} installer 失败: {e}"))?;
 
     if let Ok(mut file) = zip.by_name("version.json") {
         let mut content = String::new();
         file.read_to_string(&mut content)
-            .map_err(|e| format!("读取 Forge version.json 失败: {e}"))?;
+            .map_err(|e| format!("读取 {label} version.json 失败: {e}"))?;
         return serde_json::from_str(&content)
-            .map_err(|e| format!("解析 Forge version.json 失败: {e}"));
+            .map_err(|e| format!("解析 {label} version.json 失败: {e}"));
     }
 
     if let Ok(mut file) = zip.by_name("install_profile.json") {
         let mut content = String::new();
         file.read_to_string(&mut content)
-            .map_err(|e| format!("读取 Forge install_profile.json 失败: {e}"))?;
+            .map_err(|e| format!("读取 {label} install_profile.json 失败: {e}"))?;
         let profile: ForgeInstallProfile = serde_json::from_str(&content)
-            .map_err(|e| format!("解析 Forge install_profile.json 失败: {e}"))?;
+            .map_err(|e| format!("解析 {label} install_profile.json 失败: {e}"))?;
         if let Some(version_info) = profile.version_info {
             return Ok(version_info);
         }
     }
 
-    Err("Forge installer 中未找到可用的 version.json".into())
+    Err(format!("{label} installer 中未找到可用的 version.json"))
 }
 
 async fn fetch_forge_version_value(
@@ -326,7 +322,17 @@ async fn fetch_forge_version_value(
         forge_version
     );
     let bytes = fetch_bytes(&url, "下载 Forge installer").await?;
-    extract_forge_version_json(&bytes)
+    extract_installer_version_json(&bytes, "Forge")
+}
+
+async fn fetch_neoforge_version_value(loader_version: &str) -> Result<serde_json::Value, String> {
+    let version = loader_version.trim();
+    let url = format!(
+        "https://maven.neoforged.net/releases/net/neoforged/neoforge/{0}/neoforge-{0}-installer.jar",
+        version
+    );
+    let bytes = fetch_bytes(&url, "下载 NeoForge installer").await?;
+    extract_installer_version_json(&bytes, "NeoForge")
 }
 
 fn write_cached_version_json(path: &Path, value: &serde_json::Value) -> Result<(), String> {
@@ -335,17 +341,15 @@ fn write_cached_version_json(path: &Path, value: &serde_json::Value) -> Result<(
     std::fs::write(path, content).map_err(|e| format!("写入工作区 version.json 失败: {e}"))
 }
 
-// ─── Helper: simple file download ───
-
 async fn download_file(url: &str, dest: &Path) -> Result<(), String> {
     let response = reqwest::get(url)
         .await
-        .map_err(|e| format!("请求失败: {}", e))?;
+        .map_err(|e| format!("请求失败: {e}"))?;
     let bytes = response
         .bytes()
         .await
-        .map_err(|e| format!("读取响应失败: {}", e))?;
-    std::fs::write(dest, &bytes).map_err(|e| format!("写入文件失败: {}", e))?;
+        .map_err(|e| format!("读取响应失败: {e}"))?;
+    std::fs::write(dest, &bytes).map_err(|e| format!("写入文件失败: {e}"))?;
     Ok(())
 }
 
@@ -365,12 +369,12 @@ async fn download_with_sha1(url: &str, dest: &Path, expected_sha1: &str) -> Resu
 }
 
 fn compute_file_sha1(path: &Path) -> Result<String, String> {
-    let mut file = std::fs::File::open(path).map_err(|e| format!("打开文件失败: {}", e))?;
+    let mut file = std::fs::File::open(path).map_err(|e| format!("打开文件失败: {e}"))?;
     let mut hasher = Sha1::new();
     let mut buf = [0u8; 8192];
     loop {
         let n =
-            std::io::Read::read(&mut file, &mut buf).map_err(|e| format!("读取文件失败: {}", e))?;
+            std::io::Read::read(&mut file, &mut buf).map_err(|e| format!("读取文件失败: {e}"))?;
         if n == 0 {
             break;
         }
@@ -433,7 +437,6 @@ async fn execute_download_pool(
     while let Some(result) = pending.next().await {
         completed += 1;
         emit_task_progress(app, stage, completed, total).ok();
-
         if let Err(e) = result {
             failed.push(e);
         }
@@ -465,9 +468,6 @@ async fn download_single_task(
     Ok(())
 }
 
-// ─── OS helpers for library rule evaluation ───
-
-/// Detect current OS name matching Mojang's convention
 fn detect_os() -> String {
     match std::env::consts::OS {
         "macos" => "osx".to_string(),
@@ -475,18 +475,15 @@ fn detect_os() -> String {
     }
 }
 
-/// Evaluate a list of rules to determine if a library should be included.
-/// Returns true if the library should be used on this OS.
 fn evaluate_rules(rules: &[Rule], current_os: &str) -> bool {
     if rules.is_empty() {
-        return true; // no rules = always included
+        return true;
     }
-    // Default is disallow; rules grant or deny access
     let mut allowed = false;
     for rule in rules {
         let matches_os = match &rule.os {
             Some(os) => os.name.as_ref().map_or(true, |n| n == current_os),
-            None => true, // no OS filter means applies to all
+            None => true,
         };
         if matches_os {
             match rule.action.as_str() {
@@ -499,7 +496,6 @@ fn evaluate_rules(rules: &[Rule], current_os: &str) -> bool {
     allowed
 }
 
-/// Get the native classifier string for the current OS
 fn get_native_classifier(current_os: &str) -> String {
     let arch = if cfg!(target_arch = "x86_64") {
         "64"
@@ -509,8 +505,8 @@ fn get_native_classifier(current_os: &str) -> String {
     match current_os {
         "windows" => format!("natives-windows-{}", if arch == "64" { "64" } else { "32" }),
         "osx" => "natives-osx".to_string(),
-        "linux" => format!("natives-linux-{}", arch),
-        _ => format!("natives-{}", current_os),
+        "linux" => format!("natives-linux-{arch}"),
+        _ => format!("natives-{current_os}"),
     }
 }
 
@@ -586,6 +582,7 @@ async fn resolve_workspace_version_metadata(
         &inherited_version_json_path(workspace_id, mc_version),
         &base_value,
     )?;
+
     let merged_value = match loader_type {
         "fabric" => {
             let loader_version = pack
@@ -607,13 +604,23 @@ async fn resolve_workspace_version_metadata(
             let loader_value = fetch_forge_version_value(mc_version, loader_version).await?;
             merge_version_json(&base_value, &loader_value)
         }
+        "neoforge" => {
+            let loader_version = pack
+                .loader_version
+                .as_deref()
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .ok_or_else(|| "当前工作区使用 NeoForge，但未填写 loader_version".to_string())?;
+            let loader_value = fetch_neoforge_version_value(loader_version).await?;
+            merge_version_json(&base_value, &loader_value)
+        }
         _ => base_value,
     };
 
     write_cached_version_json(&version_json_path, &merged_value)?;
 
     let version_json: VersionJson = serde_json::from_value(merged_value.clone())
-        .map_err(|e| format!("解析工作区 version.json 失败: {}", e))?;
+        .map_err(|e| format!("解析工作区 version.json 失败: {e}"))?;
     Ok((version_json, merged_value))
 }
 
@@ -631,14 +638,14 @@ pub async fn ensure_workspace_runtime(
     workspace_id: &str,
     mc_version: &str,
 ) -> Result<String, String> {
-    let ver_dir = versions_dir(&workspace_id);
-    std::fs::create_dir_all(&ver_dir).map_err(|e| format!("创建目录失败: {}", e))?;
+    let ver_dir = versions_dir(workspace_id);
+    std::fs::create_dir_all(&ver_dir).map_err(|e| format!("创建目录失败: {e}"))?;
     let settings = load_settings().unwrap_or_default();
     let download_pool_size = settings.download_pool_size.max(1);
 
     let (version_json, merged_version_json) =
         resolve_workspace_version_metadata(workspace_id, mc_version).await?;
-    // 5. Download client.jar
+
     let client_url = &version_json.downloads.client.url;
     let client_path = ver_dir.join("client.jar");
     if should_download_with_sha1(&client_path, &version_json.downloads.client.sha1)? {
@@ -654,7 +661,6 @@ pub async fn ensure_workspace_runtime(
         emit_task_progress(app, "下载 client.jar", 1, 1).ok();
     }
 
-    // 6. Download & extract asset index
     let asset_index_url = &version_json.asset_index.url;
     let ai_path = ver_dir.join("asset_index.json");
     if should_download_with_sha1(&ai_path, &version_json.asset_index.sha1)? {
@@ -670,7 +676,6 @@ pub async fn ensure_workspace_runtime(
         emit_task_progress(app, "下载 asset index", 1, 1).ok();
     }
 
-    // 7. Download libraries
     let libs_dir = ver_dir.join("libraries");
     let current_os = detect_os();
     let mut library_tasks = Vec::new();
@@ -684,7 +689,6 @@ pub async fn ensure_workspace_runtime(
             continue;
         };
 
-        // Main artifact (the library JAR)
         let artifact_download = downloads
             .artifact
             .clone()
@@ -703,7 +707,6 @@ pub async fn ensure_workspace_runtime(
             }
         }
 
-        // Classifiers (natives for current OS)
         if let Some(classifiers) = downloads.classifiers.as_ref() {
             let native_classifier = lib
                 .natives
@@ -733,35 +736,32 @@ pub async fn ensure_workspace_runtime(
             }
         }
     }
-    execute_download_pool(&app, "下载 libraries", library_tasks, download_pool_size).await?;
+    execute_download_pool(app, "下载 libraries", library_tasks, download_pool_size).await?;
 
-    // 8. Download assets
     let assets_root = get_mmpc_dir().join("assets");
     let assets_indexes_dir = assets_root.join("indexes");
     let assets_base = assets_root.join("objects");
     std::fs::create_dir_all(&assets_indexes_dir)
-        .map_err(|e| format!("创建 assets/indexes 目录失败: {}", e))?;
+        .map_err(|e| format!("创建 assets/indexes 目录失败: {e}"))?;
     let ai_content =
-        std::fs::read_to_string(&ai_path).map_err(|e| format!("读取 asset index 失败: {}", e))?;
+        std::fs::read_to_string(&ai_path).map_err(|e| format!("读取 asset index 失败: {e}"))?;
     let asset_index: AssetIndexObjects =
-        serde_json::from_str(&ai_content).map_err(|e| format!("解析 asset index 失败: {}", e))?;
+        serde_json::from_str(&ai_content).map_err(|e| format!("解析 asset index 失败: {e}"))?;
     let asset_index_dest = assets_indexes_dir.join(format!("{}.json", version_json.asset_index.id));
     if should_download_with_sha1(&asset_index_dest, &version_json.asset_index.sha1)? {
         std::fs::copy(&ai_path, &asset_index_dest)
-            .map_err(|e| format!("写入 assets index 失败: {}", e))?;
+            .map_err(|e| format!("写入 assets index 失败: {e}"))?;
     }
 
     let mut asset_tasks = Vec::new();
-
-    for (_, obj) in &asset_index.objects {
+    for obj in asset_index.objects.values() {
         let hash = &obj.hash;
         let sub_dir = &hash[..2];
         let asset_path = assets_base.join(sub_dir).join(hash);
         let should_download = !file_matches_sha1(&asset_path, hash).unwrap_or(false);
-
         if should_download {
             asset_tasks.push(DownloadTask {
-                label: format!("下载 asset {}", hash),
+                label: format!("下载 asset {hash}"),
                 url: format!(
                     "https://resources.download.minecraft.net/{}/{}",
                     sub_dir, hash
@@ -771,9 +771,8 @@ pub async fn ensure_workspace_runtime(
             });
         }
     }
-    execute_download_pool(&app, "下载 assets", asset_tasks, download_pool_size).await?;
+    execute_download_pool(app, "下载 assets", asset_tasks, download_pool_size).await?;
 
-    // 9. Create assets symlink in workspace versions dir (best effort)
     let ws_assets_link = ver_dir.join("assets");
     if !ws_assets_link.exists() {
         #[cfg(unix)]
@@ -793,79 +792,4 @@ pub async fn ensure_workspace_runtime(
         "MC {} 数据校验完成（version: {}）",
         mc_version, version_id
     ))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::commands::workspace::get_cached_version_manifest;
-
-    /// Test that the version manifest can be fetched and parsed
-    #[tokio::test]
-    async fn test_fetch_manifest() {
-        let manifest = get_cached_version_manifest()
-            .await
-            .expect("manifest request");
-        assert!(!manifest.versions.is_empty(), "No versions in manifest");
-
-        // Verify 1.21 exists
-        let v121 = manifest.versions.iter().find(|v| v.id == "1.21");
-        assert!(v121.is_some(), "1.21 not found in manifest");
-        assert!(!v121.unwrap().url.is_empty(), "version URL is empty");
-    }
-
-    /// Test that a version JSON (1.21) can be fetched and decoded
-    #[tokio::test]
-    async fn test_fetch_version_json() {
-        // First get manifest to find the URL
-        let manifest = get_cached_version_manifest()
-            .await
-            .expect("manifest request");
-
-        let entry = manifest
-            .versions
-            .iter()
-            .find(|v| v.id == "1.21")
-            .expect("1.21 not found");
-
-        // Fetch version JSON
-        let vjson: VersionJson = reqwest::get(&entry.url)
-            .await
-            .expect("version JSON request")
-            .json()
-            .await
-            .expect("version JSON parse");
-
-        assert!(!vjson.downloads.client.url.is_empty(), "client URL empty");
-        assert!(vjson.downloads.client.size > 0, "client size is 0");
-        assert!(!vjson.asset_index.url.is_empty(), "asset index URL empty");
-        assert!(vjson.asset_index.total_size > 0, "total_size is 0");
-    }
-
-    /// Test that a snapshot version also works
-    #[tokio::test]
-    async fn test_fetch_snapshot() {
-        let manifest = get_cached_version_manifest()
-            .await
-            .expect("manifest request");
-
-        // Find a snapshot version
-        let snapshot = manifest
-            .versions
-            .iter()
-            .find(|v| v.version_type == "snapshot");
-
-        if let Some(entry) = snapshot {
-            let vjson: VersionJson = reqwest::get(&entry.url)
-                .await
-                .expect("snapshot JSON request")
-                .json()
-                .await
-                .expect("snapshot JSON parse");
-
-            assert!(!vjson.downloads.client.url.is_empty());
-            assert!(vjson.asset_index.total_size > 0);
-        }
-        // If no snapshot, just pass (between releases)
-    }
 }

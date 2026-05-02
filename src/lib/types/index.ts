@@ -60,7 +60,7 @@ export interface AppSettings {
   theme: "dark" | "cupcake";
 }
 
-export interface FabricLoaderVersion {
+export interface LoaderVersionOption {
   version: string;
   stable: boolean;
 }

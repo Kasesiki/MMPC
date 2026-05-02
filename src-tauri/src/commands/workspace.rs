@@ -2,10 +2,10 @@
 
 use std::fs;
 use std::path::PathBuf;
-use std::sync::{LazyLock, RwLock};
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use tokio::sync::OnceCell;
 
 // ─── Data structures ───
 
@@ -59,13 +59,13 @@ pub(crate) struct VersionEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FabricLoaderVersion {
+pub struct LoaderVersionOption {
     pub version: String,
+    #[serde(default)]
     pub stable: bool,
 }
 
-static VERSION_MANIFEST_CACHE: LazyLock<RwLock<Option<VersionManifest>>> =
-    LazyLock::new(|| RwLock::new(None));
+static VERSION_MANIFEST_CACHE: OnceCell<VersionManifest> = OnceCell::const_new();
 
 // ─── Path helpers ───
 
@@ -102,6 +102,7 @@ fn normalize_loader_type(loader_type: &str) -> String {
     match loader_type.trim().to_lowercase().as_str() {
         "fabric" => "fabric".to_string(),
         "forge" => "forge".to_string(),
+        "neoforge" => "neoforge".to_string(),
         _ => "vanilla".to_string(),
     }
 }
@@ -127,25 +128,17 @@ fn clear_workspace_runtime_cache(id: &str) -> Result<(), String> {
 }
 
 pub async fn get_cached_version_manifest() -> Result<VersionManifest, String> {
-    if let Ok(cache) = VERSION_MANIFEST_CACHE.read() {
-        if let Some(manifest) = cache.as_ref() {
-            return Ok(manifest.clone());
-        }
-    }
-
-    let manifest: VersionManifest =
-        reqwest::get("https://launchermeta.mojang.com/mc/game/version_manifest_v2.json")
-            .await
-            .map_err(|e| format!("获取版本列表失败: {e}"))?
-            .json()
-            .await
-            .map_err(|e| format!("解析版本列表失败: {e}"))?;
-
-    if let Ok(mut cache) = VERSION_MANIFEST_CACHE.write() {
-        *cache = Some(manifest.clone());
-    }
-
-    Ok(manifest)
+    VERSION_MANIFEST_CACHE
+        .get_or_try_init(|| async {
+            reqwest::get("https://launchermeta.mojang.com/mc/game/version_manifest_v2.json")
+                .await
+                .map_err(|e| format!("获取版本列表失败: {e}"))?
+                .json()
+                .await
+                .map_err(|e| format!("解析版本列表失败: {e}"))
+        })
+        .await
+        .cloned()
 }
 
 pub async fn find_version_manifest_entry(version_id: &str) -> Result<VersionEntry, String> {
@@ -287,7 +280,7 @@ pub async fn list_release_versions() -> Result<Vec<String>, String> {
 #[tauri::command]
 pub async fn list_fabric_loader_versions(
     mc_version: String,
-) -> Result<Vec<FabricLoaderVersion>, String> {
+) -> Result<Vec<LoaderVersionOption>, String> {
     let versions: serde_json::Value = reqwest::get(format!(
         "https://meta.fabricmc.net/v2/versions/loader/{mc_version}"
     ))
@@ -304,13 +297,97 @@ pub async fn list_fabric_loader_versions(
         .into_iter()
         .filter_map(|entry| {
             let loader = entry.get("loader")?;
-            Some(FabricLoaderVersion {
+            Some(LoaderVersionOption {
                 version: loader.get("version")?.as_str()?.to_string(),
                 stable: loader
                     .get("stable")
                     .and_then(|value| value.as_bool())
                     .unwrap_or(false),
             })
+        })
+        .collect())
+}
+
+fn parse_maven_versions(xml: &str) -> Vec<String> {
+    let mut versions = Vec::new();
+    let mut start = 0usize;
+    let open = "<version>";
+    let close = "</version>";
+
+    while let Some(open_idx) = xml[start..].find(open) {
+        let value_start = start + open_idx + open.len();
+        let Some(close_idx) = xml[value_start..].find(close) else {
+            break;
+        };
+        let value_end = value_start + close_idx;
+        let value = xml[value_start..value_end].trim();
+        if !value.is_empty() {
+            versions.push(value.to_string());
+        }
+        start = value_end + close.len();
+    }
+
+    versions
+}
+
+fn mc_version_to_neoforge_prefix(mc_version: &str) -> Option<String> {
+    mc_version.strip_prefix("1.").map(|rest| rest.to_string())
+}
+
+async fn fetch_maven_metadata_versions(url: &str, label: &str) -> Result<Vec<String>, String> {
+    let xml = reqwest::get(url)
+        .await
+        .map_err(|e| format!("{label} 获取失败: {e}"))?
+        .text()
+        .await
+        .map_err(|e| format!("{label} 读取失败: {e}"))?;
+    Ok(parse_maven_versions(&xml))
+}
+
+#[tauri::command]
+pub async fn list_forge_loader_versions(
+    mc_version: String,
+) -> Result<Vec<LoaderVersionOption>, String> {
+    let versions = fetch_maven_metadata_versions(
+        "https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml",
+        "Forge 版本列表",
+    )
+    .await?;
+
+    Ok(versions
+        .into_iter()
+        .filter_map(|value| {
+            let suffix = value.strip_prefix(&format!("{mc_version}-"))?;
+            Some(LoaderVersionOption {
+                version: suffix.to_string(),
+                stable: true,
+            })
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub async fn list_neoforge_loader_versions(
+    mc_version: String,
+) -> Result<Vec<LoaderVersionOption>, String> {
+    let Some(prefix) = mc_version_to_neoforge_prefix(&mc_version) else {
+        return Ok(vec![]);
+    };
+    let versions = fetch_maven_metadata_versions(
+        "https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml",
+        "NeoForge 版本列表",
+    )
+    .await?;
+
+    Ok(versions
+        .into_iter()
+        .filter(|value| value.starts_with(&prefix))
+        .map(|value| {
+            let stable = !value.contains("beta");
+            LoaderVersionOption {
+                version: value,
+                stable,
+            }
         })
         .collect())
 }

@@ -1,6 +1,10 @@
 <script lang="ts">
-  import { listFabricLoaderVersions } from "$lib/stores/workspace";
-  import type { FabricLoaderVersion, PackConfig, Workspace } from "$lib/types";
+  import {
+    listFabricLoaderVersions,
+    listForgeLoaderVersions,
+    listNeoForgeLoaderVersions
+  } from "$lib/stores/workspace";
+  import type { LoaderVersionOption, PackConfig, Workspace } from "$lib/types";
 
   let {
     workspace,
@@ -15,8 +19,8 @@
   } = $props();
 
   let saved = $state(false);
-  let fabricLoaderVersions = $state<FabricLoaderVersion[]>([]);
-  let loadingFabricVersions = $state(false);
+  let loaderVersions = $state<LoaderVersionOption[]>([]);
+  let loadingLoaderVersions = $state(false);
 
   $effect(() => {
     if (config.loader_type === "vanilla") {
@@ -25,15 +29,23 @@
   });
 
   $effect(() => {
-    if (config.loader_type !== "fabric") {
-      fabricLoaderVersions = [];
+    if (config.loader_type === "vanilla") {
+      loaderVersions = [];
+      config.loader_version = null;
       return;
     }
 
-    loadingFabricVersions = true;
-    listFabricLoaderVersions(config.mc_version)
+    loadingLoaderVersions = true;
+    const loaderPromise =
+      config.loader_type === "fabric"
+        ? listFabricLoaderVersions(config.mc_version)
+        : config.loader_type === "forge"
+          ? listForgeLoaderVersions(config.mc_version)
+          : listNeoForgeLoaderVersions(config.mc_version);
+
+    loaderPromise
       .then((versions) => {
-        fabricLoaderVersions = versions;
+        loaderVersions = versions;
         const stable = versions.find((entry) => entry.stable);
         const fallback = versions[0];
         const nextVersion = stable?.version ?? fallback?.version ?? "";
@@ -42,9 +54,13 @@
         }
       })
       .finally(() => {
-        loadingFabricVersions = false;
+        loadingLoaderVersions = false;
       });
   });
+
+  function usesLoaderOptions() {
+    return config.loader_type === "fabric" || config.loader_type === "forge" || config.loader_type === "neoforge";
+  }
 
   function normalizedConfig(): PackConfig {
     return {
@@ -111,27 +127,28 @@
           <option value="vanilla">Vanilla</option>
           <option value="fabric">Fabric</option>
           <option value="forge">Forge</option>
+          <option value="neoforge">NeoForge</option>
         </select>
       </div>
       <div>
         <label class="label" for="cfg-loader-version">
           <span class="label-text">加载器版本</span>
         </label>
-        {#if config.loader_type === "fabric"}
+        {#if usesLoaderOptions()}
           <select
             id="cfg-loader-version"
             class="select select-bordered w-full"
             bind:value={config.loader_version}
-            disabled={loadingFabricVersions || fabricLoaderVersions.length === 0}
+            disabled={loadingLoaderVersions || loaderVersions.length === 0}
           >
-            {#each fabricLoaderVersions as loader}
+            {#each loaderVersions as loader}
               <option value={loader.version}>
                 {loader.version}{loader.stable ? " · stable" : ""}
               </option>
             {/each}
           </select>
-          {#if loadingFabricVersions}
-            <p class="text-xs text-base-content/50 mt-2">正在加载 Fabric 版本列表...</p>
+          {#if loadingLoaderVersions}
+            <p class="text-xs text-base-content/50 mt-2">正在加载 Loader 版本列表...</p>
           {/if}
         {:else}
           <input

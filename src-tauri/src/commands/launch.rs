@@ -204,6 +204,12 @@ pub async fn launch_game(
     if libraries.is_empty() {
         return Err("未检测到 libraries 依赖，请先下载 MC 版本".into());
     }
+    let has_fabric_loader = libraries.iter().any(|path| {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| name.starts_with("fabric-loader-") && name.ends_with(".jar"))
+            .unwrap_or(false)
+    });
     ensure_required_assets(&ws)?;
     prepare_natives_dir(&ws, &libraries)?;
 
@@ -306,7 +312,13 @@ pub async fn launch_game(
         "game-status",
         serde_json::json!({
             "state":"log",
-            "message": format!("{} @{}", program.to_string_lossy(), argfile.display())
+            "message": format!(
+                "{} @{} (libraries: {}, fabric_loader: {})",
+                program.to_string_lossy(),
+                argfile.display(),
+                libraries.len(),
+                if has_fabric_loader { "yes" } else { "no" }
+            )
         }),
     )
     .ok();

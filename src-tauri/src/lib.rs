@@ -10,6 +10,8 @@ pub fn run() {
             workspace::list_workspaces,
             workspace::list_release_versions,
             workspace::list_fabric_loader_versions,
+            workspace::list_forge_loader_versions,
+            workspace::list_neoforge_loader_versions,
             workspace::create_workspace,
             workspace::delete_workspace,
             workspace::save_pack_config,

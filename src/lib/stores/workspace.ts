@@ -1,6 +1,6 @@
 import { writable, derived } from "svelte/store";
 import { invoke } from "@tauri-apps/api/core";
-import type { Workspace, LaunchStatus, FabricLoaderVersion } from "$lib/types";
+import type { Workspace, LaunchStatus, LoaderVersionOption } from "$lib/types";
 
 export const workspaces = writable<Workspace[]>([]);
 export const activeWorkspaceId = writable<string | null>(null);
@@ -73,13 +73,39 @@ export async function listReleaseVersions(): Promise<string[]> {
 
 export async function listFabricLoaderVersions(
   mcVersion: string,
-): Promise<FabricLoaderVersion[]> {
+): Promise<LoaderVersionOption[]> {
   try {
-    return await invoke<FabricLoaderVersion[]>("list_fabric_loader_versions", {
+    return await invoke<LoaderVersionOption[]>("list_fabric_loader_versions", {
       mcVersion,
     });
   } catch (e) {
     console.error("加载 Fabric 版本列表失败", e);
+    return [];
+  }
+}
+
+export async function listForgeLoaderVersions(
+  mcVersion: string,
+): Promise<LoaderVersionOption[]> {
+  try {
+    return await invoke<LoaderVersionOption[]>("list_forge_loader_versions", {
+      mcVersion,
+    });
+  } catch (e) {
+    console.error("加载 Forge 版本列表失败", e);
+    return [];
+  }
+}
+
+export async function listNeoForgeLoaderVersions(
+  mcVersion: string,
+): Promise<LoaderVersionOption[]> {
+  try {
+    return await invoke<LoaderVersionOption[]>("list_neoforge_loader_versions", {
+      mcVersion,
+    });
+  } catch (e) {
+    console.error("加载 NeoForge 版本列表失败", e);
     return [];
   }
 }
