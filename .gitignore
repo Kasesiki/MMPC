@@ -16,6 +16,12 @@ target
 README_AI.md
 
 node_modules/
+.svelte-kit/
+build/
+.VSCodeCounter/
+tmp-*
+.reasonix/semantic/
+.codex
 # RustRover
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
 #  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
