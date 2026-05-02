@@ -54,6 +54,8 @@ pub struct Rule {
     pub action: String,
     #[serde(default)]
     pub os: Option<RuleOs>,
+    #[serde(default)]
+    pub features: HashMap<String, bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -83,6 +85,9 @@ pub struct LaunchArgumentContext {
     pub launcher_version: String,
     pub classpath: String,
     pub classpath_separator: String,
+    pub resolution_width: Option<String>,
+    pub resolution_height: Option<String>,
+    pub feature_flags: HashMap<String, bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -99,9 +104,16 @@ pub fn parse_version_metadata(content: &str) -> Result<VersionMetadata, LaunchEr
         .map_err(|e| LaunchError::InvalidConfig(format!("invalid version metadata: {e}")))
 }
 
-pub fn merge_version_metadata(parent: &VersionMetadata, child: &VersionMetadata) -> VersionMetadata {
+pub fn merge_version_metadata(
+    parent: &VersionMetadata,
+    child: &VersionMetadata,
+) -> VersionMetadata {
     let mut merged = parent.clone();
-    merged.id = if child.id.is_empty() { merged.id } else { child.id.clone() };
+    merged.id = if child.id.is_empty() {
+        merged.id
+    } else {
+        child.id.clone()
+    };
     merged.inherits_from = child.inherits_from.clone();
     if child.main_class.is_some() {
         merged.main_class = child.main_class.clone();
@@ -129,10 +141,9 @@ pub fn resolve_launch_arguments(
     metadata: &VersionMetadata,
     context: &LaunchArgumentContext,
 ) -> Result<ResolvedLaunchArguments, LaunchError> {
-    let main_class = metadata
-        .main_class
-        .clone()
-        .ok_or_else(|| LaunchError::InvalidConfig("mainClass is missing in version metadata".into()))?;
+    let main_class = metadata.main_class.clone().ok_or_else(|| {
+        LaunchError::InvalidConfig("mainClass is missing in version metadata".into())
+    })?;
     let asset_index_name = metadata
         .asset_index
         .as_ref()
@@ -159,15 +170,21 @@ pub fn resolve_launch_arguments(
     replacements.insert("launcher_version", context.launcher_version.clone());
     replacements.insert("classpath", context.classpath.clone());
     replacements.insert("classpath_separator", context.classpath_separator.clone());
+    if let Some(width) = &context.resolution_width {
+        replacements.insert("resolution_width", width.clone());
+    }
+    if let Some(height) = &context.resolution_height {
+        replacements.insert("resolution_height", height.clone());
+    }
 
     let jvm_args = metadata
         .arguments
         .as_ref()
-        .map(|a| resolve_argument_specs(&a.jvm, &replacements))
+        .map(|a| resolve_argument_specs(&a.jvm, &replacements, &context.feature_flags))
         .unwrap_or_default();
 
     let game_args = if let Some(arguments) = metadata.arguments.as_ref() {
-        resolve_argument_specs(&arguments.game, &replacements)
+        resolve_argument_specs(&arguments.game, &replacements, &context.feature_flags)
     } else if let Some(old_args) = metadata.minecraft_arguments.as_ref() {
         old_args
             .split_whitespace()
@@ -189,6 +206,7 @@ pub fn resolve_launch_arguments(
 fn resolve_argument_specs(
     specs: &[ArgumentSpec],
     replacements: &HashMap<&str, String>,
+    feature_flags: &HashMap<String, bool>,
 ) -> Vec<String> {
     let current_os = detect_os();
     let mut args = Vec::new();
@@ -197,7 +215,7 @@ fn resolve_argument_specs(
         match spec {
             ArgumentSpec::Plain(value) => args.push(substitute_placeholders(value, replacements)),
             ArgumentSpec::Conditional(argument) => {
-                if !evaluate_rules(&argument.rules, &current_os) {
+                if !evaluate_rules(&argument.rules, &current_os, feature_flags) {
                     continue;
                 }
                 match &argument.value {
@@ -205,7 +223,11 @@ fn resolve_argument_specs(
                         args.push(substitute_placeholders(value, replacements));
                     }
                     ArgumentValue::Multiple(values) => {
-                        args.extend(values.iter().map(|value| substitute_placeholders(value, replacements)));
+                        args.extend(
+                            values
+                                .iter()
+                                .map(|value| substitute_placeholders(value, replacements)),
+                        );
                     }
                 }
             }
@@ -230,7 +252,7 @@ fn detect_os() -> String {
     }
 }
 
-fn evaluate_rules(rules: &[Rule], current_os: &str) -> bool {
+fn evaluate_rules(rules: &[Rule], current_os: &str, feature_flags: &HashMap<String, bool>) -> bool {
     if rules.is_empty() {
         return true;
     }
@@ -241,7 +263,11 @@ fn evaluate_rules(rules: &[Rule], current_os: &str) -> bool {
             Some(os) => os.name.as_ref().map_or(true, |name| name == current_os),
             None => true,
         };
-        if matches_os {
+        let matches_features = rule
+            .features
+            .iter()
+            .all(|(name, expected)| feature_flags.get(name).copied().unwrap_or(false) == *expected);
+        if matches_os && matches_features {
             match rule.action.as_str() {
                 "allow" => allowed = true,
                 "disallow" => allowed = false,
@@ -293,13 +319,24 @@ mod tests {
                 launcher_version: "0.1.0".into(),
                 classpath: "/libs/a.jar:/libs/b.jar".into(),
                 classpath_separator: ":".into(),
+                resolution_width: Some("1280".into()),
+                resolution_height: Some("720".into()),
+                feature_flags: HashMap::from([
+                    ("is_demo_user".into(), false),
+                    ("has_custom_resolution".into(), true),
+                ]),
             },
         )
         .expect("resolve arguments");
 
-        assert_eq!(resolved.main_class, "net.fabricmc.loader.impl.launch.knot.KnotClient");
+        assert_eq!(
+            resolved.main_class,
+            "net.fabricmc.loader.impl.launch.knot.KnotClient"
+        );
         assert!(resolved.jvm_args.contains(&"-cp".to_string()));
-        assert!(resolved.jvm_args.contains(&"/libs/a.jar:/libs/b.jar".to_string()));
+        assert!(resolved
+            .jvm_args
+            .contains(&"/libs/a.jar:/libs/b.jar".to_string()));
         assert!(resolved.game_args.contains(&"Player".to_string()));
         assert!(resolved.game_args.contains(&"17".to_string()));
     }
@@ -325,7 +362,52 @@ mod tests {
 
         let merged = merge_version_metadata(&parent, &child);
         let game_args = merged.arguments.expect("merged args").game;
-        assert_eq!(merged.main_class.expect("main class"), "net.minecraft.client.main.Main");
+        assert_eq!(
+            merged.main_class.expect("main class"),
+            "net.minecraft.client.main.Main"
+        );
         assert_eq!(game_args.len(), 3);
+    }
+
+    #[test]
+    fn skips_demo_argument_when_not_demo_user() {
+        let content = r#"{
+          "id": "1.21",
+          "mainClass": "net.minecraft.client.main.Main",
+          "arguments": {
+            "game": [
+              {
+                "rules": [{ "action": "allow", "features": { "is_demo_user": true } }],
+                "value": "--demo"
+              }
+            ]
+          }
+        }"#;
+        let metadata = parse_version_metadata(content).expect("parse metadata");
+        let resolved = resolve_launch_arguments(
+            &metadata,
+            &LaunchArgumentContext {
+                auth_player_name: "Player".into(),
+                auth_uuid: "uuid".into(),
+                auth_access_token: "token".into(),
+                version_name: "1.21".into(),
+                game_directory: "/game".into(),
+                assets_root: "/assets".into(),
+                assets_index_name: "17".into(),
+                user_type: "legacy".into(),
+                version_type: "release".into(),
+                natives_directory: "/game/natives".into(),
+                launcher_name: "mmpc".into(),
+                launcher_version: "0.1.0".into(),
+                classpath: "/libs/a.jar:/libs/b.jar".into(),
+                classpath_separator: ":".into(),
+                resolution_width: None,
+                resolution_height: None,
+                feature_flags: HashMap::from([("is_demo_user".into(), false)]),
+            },
+        )
+        .expect("resolve arguments");
+
+        assert!(!resolved.game_args.contains(&"--demo".to_string()));
     }
 }

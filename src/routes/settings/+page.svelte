@@ -6,7 +6,7 @@
   const minPoolSize = 1;
   const maxPoolSize = 64;
 
-  let settings = $state<AppSettings>({ download_pool_size: 16 });
+  let settings = $state<AppSettings>({ download_pool_size: 16, theme: "dark" });
   let loading = $state(true);
   let saving = $state(false);
   let saveMessage = $state("");
@@ -62,6 +62,26 @@
   {:else}
     <div class="max-w-2xl card bg-base-200 border border-base-300">
       <div class="card-body gap-5">
+        <div>
+          <h2 class="card-title">界面主题</h2>
+          <p class="text-sm text-base-content/60 mt-1">主题切换会立即生效，并同步保存到全局设置。</p>
+        </div>
+
+        <div class="grid gap-3 sm:grid-cols-2">
+          <button
+            class={`btn justify-start h-auto py-4 ${settings.theme === "dark" ? "btn-primary" : "btn-outline"}`}
+            onclick={() => (settings.theme = "dark")}
+          >
+            深色主题
+          </button>
+          <button
+            class={`btn justify-start h-auto py-4 ${settings.theme === "cupcake" ? "btn-primary" : "btn-outline"}`}
+            onclick={() => (settings.theme = "cupcake")}
+          >
+            蛋糕主题
+          </button>
+        </div>
+
         <div>
           <h2 class="card-title">下载池上限</h2>
           <p class="text-sm text-base-content/60 mt-1">默认 16。值越大，同时下载的资源越多，但会占用更多带宽与系统资源。</p>

@@ -1,13 +1,60 @@
 <script lang="ts">
+  import { onMount } from "svelte";
+  import { invoke } from "@tauri-apps/api/core";
+  import type { AppSettings } from "$lib/types";
   import "../app.css";
 
   let { children } = $props();
 
-  let currentTheme = $state("dark");
+  let currentTheme = $state<AppSettings["theme"]>("dark");
+  let savingTheme = false;
 
-  function toggleTheme() {
-    currentTheme = currentTheme === "dark" ? "cupcake" : "dark";
-    document.documentElement.setAttribute("data-theme", currentTheme);
+  function applyTheme(theme: AppSettings["theme"]) {
+    currentTheme = theme;
+    document.documentElement.setAttribute("data-theme", theme);
+  }
+
+  onMount(async () => {
+    try {
+      const settings = await invoke<AppSettings>("get_settings");
+      applyTheme(settings.theme);
+    } catch {
+      applyTheme("dark");
+    }
+  });
+
+  async function persistTheme(theme: AppSettings["theme"]) {
+    if (savingTheme) return;
+    savingTheme = true;
+    try {
+      const next = await invoke<AppSettings>("save_settings", {
+        settings: {
+          download_pool_size: 16,
+          theme
+        }
+      });
+      applyTheme(next.theme);
+    } catch {
+      applyTheme(theme);
+    } finally {
+      savingTheme = false;
+    }
+  }
+
+  async function toggleTheme() {
+    const nextTheme = currentTheme === "dark" ? "cupcake" : "dark";
+    applyTheme(nextTheme);
+    try {
+      const settings = await invoke<AppSettings>("get_settings");
+      await invoke<AppSettings>("save_settings", {
+        settings: {
+          ...settings,
+          theme: nextTheme
+        }
+      });
+    } catch {
+      await persistTheme(nextTheme);
+    }
   }
 </script>
 

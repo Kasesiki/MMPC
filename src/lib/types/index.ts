@@ -57,4 +57,5 @@ export interface JavaRuntime {
 
 export interface AppSettings {
   download_pool_size: number;
+  theme: "dark" | "cupcake";
 }

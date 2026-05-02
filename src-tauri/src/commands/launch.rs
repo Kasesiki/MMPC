@@ -1,20 +1,26 @@
+use super::download::ensure_workspace_runtime;
+use super::java::resolve_java_path_by_id;
 use mc_launcher_core::auth::offline::OfflineUser;
 use mc_launcher_core::launch::offline::{LaunchConfig, OfflineLauncher};
-use mc_launcher_core::launch::version::parse_version_metadata;
+use mc_launcher_core::launch::version::{merge_version_metadata, parse_version_metadata};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use tauri::Emitter;
 use zip::read::ZipArchive;
-use super::java::resolve_java_path_by_id;
-use super::download::ensure_workspace_runtime;
 
 fn mm() -> PathBuf {
     let e = std::env::current_exe().unwrap_or_default();
-    e.parent().map(|p| p.join(".MMPC")).unwrap_or_else(|| PathBuf::from(".MMPC"))
+    e.parent()
+        .map(|p| p.join(".MMPC"))
+        .unwrap_or_else(|| PathBuf::from(".MMPC"))
 }
-fn wd(id: &str) -> PathBuf { mm().join("workspaces").join(id) }
-fn ps(p: &PathBuf) -> &str { p.to_str().unwrap_or("") }
+fn wd(id: &str) -> PathBuf {
+    mm().join("workspaces").join(id)
+}
+fn ps(p: &PathBuf) -> &str {
+    p.to_str().unwrap_or("")
+}
 
 fn format_arg_for_argfile(arg: &str) -> String {
     if arg.is_empty() {
@@ -30,16 +36,14 @@ fn format_arg_for_argfile(arg: &str) -> String {
 
 fn write_java_argfile(ws: &PathBuf, args: &[String]) -> Result<PathBuf, String> {
     let launch_dir = ws.join("launch");
-    std::fs::create_dir_all(&launch_dir)
-        .map_err(|e| format!("创建 launch 目录失败: {e}"))?;
+    std::fs::create_dir_all(&launch_dir).map_err(|e| format!("创建 launch 目录失败: {e}"))?;
     let argfile = launch_dir.join("java.args");
     let content = args
         .iter()
         .map(|a| format_arg_for_argfile(a))
         .collect::<Vec<_>>()
         .join(" ");
-    std::fs::write(&argfile, content)
-        .map_err(|e| format!("写入 argfile 失败: {e}"))?;
+    std::fs::write(&argfile, content).map_err(|e| format!("写入 argfile 失败: {e}"))?;
     Ok(argfile)
 }
 
@@ -102,8 +106,7 @@ struct AssetObject {
 
 fn prepare_natives_dir(ws: &PathBuf, libraries: &[PathBuf]) -> Result<(), String> {
     let natives_dir = ws.join("natives");
-    std::fs::create_dir_all(&natives_dir)
-        .map_err(|e| format!("创建 natives 目录失败: {e}"))?;
+    std::fs::create_dir_all(&natives_dir).map_err(|e| format!("创建 natives 目录失败: {e}"))?;
 
     for lib in libraries {
         if !is_native_jar(lib) {
@@ -192,7 +195,9 @@ pub async fn launch_game(
     let mc_ver = cfg["mc_version"].as_str().unwrap_or("1.21").to_string();
     let _ = ensure_workspace_runtime(&app, &workspace_id, &mc_ver).await?;
     let cj = ws.join("versions").join("client.jar");
-    if !cj.exists() { return Err("no client.jar".into()); }
+    if !cj.exists() {
+        return Err("no client.jar".into());
+    }
 
     // Collect all library JARs into classpath
     let libraries = collect_libraries(&ws);
@@ -203,17 +208,31 @@ pub async fn launch_game(
     prepare_natives_dir(&ws, &libraries)?;
 
     // Collect JVM args
-    let mut ja: Vec<String> = cfg["jvm_args"].as_array()
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+    let mut ja: Vec<String> = cfg["jvm_args"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
-    ja.extend([
-        "--add-modules", "ALL-MODULE-PATH",
-        "--add-opens", "java.base/java.lang=ALL-UNNAMED",
-        "--add-opens", "java.base/java.util=ALL-UNNAMED",
-        "--add-opens", "java.base/java.lang.reflect=ALL-UNNAMED",
-        "--add-opens", "java.base/java.text=ALL-UNNAMED",
-        "--add-opens", "java.desktop/java.awt=ALL-UNNAMED",
-    ].map(String::from));
+    ja.extend(
+        [
+            "--add-modules",
+            "ALL-MODULE-PATH",
+            "--add-opens",
+            "java.base/java.lang=ALL-UNNAMED",
+            "--add-opens",
+            "java.base/java.util=ALL-UNNAMED",
+            "--add-opens",
+            "java.base/java.lang.reflect=ALL-UNNAMED",
+            "--add-opens",
+            "java.base/java.text=ALL-UNNAMED",
+            "--add-opens",
+            "java.desktop/java.awt=ALL-UNNAMED",
+        ]
+        .map(String::from),
+    );
 
     let configured_java = cfg["java_runtime_id"]
         .as_str()
@@ -226,14 +245,21 @@ pub async fn launch_game(
         .map_err(|e| format!("读取 version.json 失败: {e}"))?;
     let version_meta = serde_json::from_str::<serde_json::Value>(&version_meta_raw)
         .map_err(|e| format!("解析 version.json 失败: {e}"))?;
-    let parsed_version_metadata = parse_version_metadata(&version_meta_raw)
+    let mut parsed_version_metadata = parse_version_metadata(&version_meta_raw)
         .map_err(|e| format!("解析启动元数据失败: {e}"))?;
-    let asset_index_id = version_meta
-        ["assetIndex"]["id"]
-        .as_str()
-        .unwrap_or(&mc_ver);
-    let main_class = version_meta
-        ["mainClass"]
+    if let Some(parent_id) = parsed_version_metadata.inherits_from.clone() {
+        let parent_version_json_path = ws.join("versions").join(format!("{parent_id}.json"));
+        if parent_version_json_path.exists() {
+            let parent_raw = std::fs::read_to_string(&parent_version_json_path)
+                .map_err(|e| format!("读取父级 version.json 失败: {e}"))?;
+            let parent_metadata = parse_version_metadata(&parent_raw)
+                .map_err(|e| format!("解析父级启动元数据失败: {e}"))?;
+            parsed_version_metadata =
+                merge_version_metadata(&parent_metadata, &parsed_version_metadata);
+        }
+    }
+    let asset_index_id = version_meta["assetIndex"]["id"].as_str().unwrap_or(&mc_ver);
+    let main_class = version_meta["mainClass"]
         .as_str()
         .unwrap_or("net.minecraft.client.main.Main");
     let mx = cfg["max_memory_mb"].as_u64().unwrap_or(4096);
@@ -245,14 +271,19 @@ pub async fn launch_game(
     let assets_dir = mm().join("assets");
 
     let mut b = LaunchConfig::builder()
-        .java_path(&jv).minecraft_jar(ps(&cj))
+        .java_path(&jv)
+        .minecraft_jar(ps(&cj))
         .main_class(main_class)
-        .game_dir(ps(&ws)).assets_dir(ps(&assets_dir))
+        .game_dir(ps(&ws))
+        .assets_dir(ps(&assets_dir))
         .asset_index(asset_index_id)
-        .max_mem(&format!("{mx}M")).min_mem(&format!("{mi}M"))
+        .max_mem(&format!("{mx}M"))
+        .min_mem(&format!("{mi}M"))
         .version_metadata(parsed_version_metadata)
         .resolution(w, h);
-    for a in &ja { b = b.add_jvm_arg(a); }
+    for a in &ja {
+        b = b.add_jvm_arg(a);
+    }
     // Add all library JARs to classpath
     for lib in &libraries {
         b = b.add_classpath(lib);
@@ -271,10 +302,14 @@ pub async fn launch_game(
     cmd.arg(format!("@{}", argfile.to_string_lossy()));
 
     // Log command (argfile style)
-    app.emit("game-status", serde_json::json!({
-        "state":"log",
-        "message": format!("{} @{}", program.to_string_lossy(), argfile.display())
-    })).ok();
+    app.emit(
+        "game-status",
+        serde_json::json!({
+            "state":"log",
+            "message": format!("{} @{}", program.to_string_lossy(), argfile.display())
+        }),
+    )
+    .ok();
 
     cmd.stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
@@ -288,13 +323,20 @@ pub async fn launch_game(
         if let Some(mut se) = ch.stderr.take() {
             let mut bf = [0u8; 4096];
             while let Ok(n) = se.read(&mut bf) {
-                if n == 0 { break; }
+                if n == 0 {
+                    break;
+                }
                 let t = String::from_utf8_lossy(&bf[..n]).to_string();
-                a2.emit("game-status", serde_json::json!({"state":"stderr","message":t})).ok();
+                a2.emit(
+                    "game-status",
+                    serde_json::json!({"state":"stderr","message":t}),
+                )
+                .ok();
             }
         }
         let _ = ch.wait();
-        a2.emit("game-status", serde_json::json!({"state":"stopped"})).ok();
+        a2.emit("game-status", serde_json::json!({"state":"stopped"}))
+            .ok();
     });
     Ok(pid)
 }

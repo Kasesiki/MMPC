@@ -26,7 +26,9 @@ use std::process::Command;
 use serde::{Deserialize, Serialize};
 
 use crate::auth::offline::OfflineUser;
-use crate::launch::version::{resolve_launch_arguments, LaunchArgumentContext, ResolvedLaunchArguments, VersionMetadata};
+use crate::launch::version::{
+    resolve_launch_arguments, LaunchArgumentContext, ResolvedLaunchArguments, VersionMetadata,
+};
 
 /// Configuration for launching Minecraft (offline mode)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -205,24 +207,31 @@ impl LaunchConfigBuilder {
     ///
     /// For a fallible version see [`try_build`](Self::try_build).
     pub fn build(self) -> LaunchConfig {
-        self.try_build().expect("LaunchConfigBuilder: missing required fields")
+        self.try_build()
+            .expect("LaunchConfigBuilder: missing required fields")
     }
 
     /// Consume the builder and produce a [`LaunchConfig`], returning an error
     /// if any required fields are missing.
     pub fn try_build(self) -> Result<LaunchConfig, crate::launch::LaunchError> {
-        let java_path = self.java_path
-            .ok_or_else(|| crate::launch::LaunchError::InvalidConfig("java_path is required".into()))?;
-        let minecraft_jar = self.minecraft_jar
-            .ok_or_else(|| crate::launch::LaunchError::InvalidConfig("minecraft_jar is required".into()))?;
-        let main_class = self.main_class
+        let java_path = self.java_path.ok_or_else(|| {
+            crate::launch::LaunchError::InvalidConfig("java_path is required".into())
+        })?;
+        let minecraft_jar = self.minecraft_jar.ok_or_else(|| {
+            crate::launch::LaunchError::InvalidConfig("minecraft_jar is required".into())
+        })?;
+        let main_class = self
+            .main_class
             .unwrap_or_else(|| "net.minecraft.client.main.Main".into());
-        let game_dir = self.game_dir
-            .ok_or_else(|| crate::launch::LaunchError::InvalidConfig("game_dir is required".into()))?;
-        let assets_dir = self.assets_dir
-            .ok_or_else(|| crate::launch::LaunchError::InvalidConfig("assets_dir is required".into()))?;
-        let asset_index = self.asset_index
-            .ok_or_else(|| crate::launch::LaunchError::InvalidConfig("asset_index is required".into()))?;
+        let game_dir = self.game_dir.ok_or_else(|| {
+            crate::launch::LaunchError::InvalidConfig("game_dir is required".into())
+        })?;
+        let assets_dir = self.assets_dir.ok_or_else(|| {
+            crate::launch::LaunchError::InvalidConfig("assets_dir is required".into())
+        })?;
+        let asset_index = self.asset_index.ok_or_else(|| {
+            crate::launch::LaunchError::InvalidConfig("asset_index is required".into())
+        })?;
 
         Ok(LaunchConfig {
             java_path,
@@ -241,7 +250,9 @@ impl LaunchConfigBuilder {
             height: self.height,
             version_metadata: self.version_metadata,
             launcher_name: self.launcher_name.unwrap_or_else(|| "mmpc".into()),
-            launcher_version: self.launcher_version.unwrap_or_else(|| env!("CARGO_PKG_VERSION").into()),
+            launcher_version: self
+                .launcher_version
+                .unwrap_or_else(|| env!("CARGO_PKG_VERSION").into()),
         })
     }
 }
@@ -259,7 +270,9 @@ impl OfflineLauncher {
     pub fn build_command(&self, config: &LaunchConfig, user: &OfflineUser) -> Command {
         let mut cmd = Command::new(&config.java_path);
         let separator = if cfg!(windows) { ";" } else { ":" };
-        let mut cp_entries = config.classpath.iter()
+        let mut cp_entries = config
+            .classpath
+            .iter()
             .map(|p| p.to_string_lossy().to_string())
             .collect::<Vec<_>>();
         cp_entries.push(config.minecraft_jar.to_string_lossy().to_string());
@@ -305,8 +318,10 @@ impl OfflineLauncher {
             cmd.arg("--uuid").arg(user.uuid.to_string());
             cmd.arg("--accessToken").arg(&user.access_token);
             cmd.arg("--version").arg(&config.asset_index);
-            cmd.arg("--gameDir").arg(config.game_dir.to_string_lossy().as_ref());
-            cmd.arg("--assetsDir").arg(config.assets_dir.to_string_lossy().as_ref());
+            cmd.arg("--gameDir")
+                .arg(config.game_dir.to_string_lossy().as_ref());
+            cmd.arg("--assetsDir")
+                .arg(config.assets_dir.to_string_lossy().as_ref());
             cmd.arg("--assetIndex").arg(&config.asset_index);
 
             if config.demo {
@@ -353,6 +368,15 @@ fn resolve_loader_aware_arguments(
             launcher_version: config.launcher_version.clone(),
             classpath: classpath.to_string(),
             classpath_separator: classpath_separator.to_string(),
+            resolution_width: config.width.map(|v| v.to_string()),
+            resolution_height: config.height.map(|v| v.to_string()),
+            feature_flags: std::collections::HashMap::from([
+                ("is_demo_user".into(), config.demo),
+                (
+                    "has_custom_resolution".into(),
+                    config.width.is_some() && config.height.is_some(),
+                ),
+            ]),
         },
     )
     .ok()?;
@@ -412,7 +436,8 @@ mod tests {
         assert_eq!(program, "/usr/bin/java");
 
         // Convert OsStr args to strings for inspection
-        let args: Vec<String> = cmd.get_args()
+        let args: Vec<String> = cmd
+            .get_args()
             .map(|a| a.to_string_lossy().to_string())
             .collect();
 
