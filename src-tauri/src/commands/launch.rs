@@ -12,6 +12,14 @@ use std::path::PathBuf;
 use tauri::Emitter;
 use zip::read::ZipArchive;
 
+pub struct PreparedLaunch {
+    pub workspace_dir: PathBuf,
+    pub program: String,
+    pub argfile_path: PathBuf,
+    pub libraries_count: usize,
+    pub has_fabric_loader: bool,
+}
+
 fn mm() -> PathBuf {
     let e = std::env::current_exe().unwrap_or_default();
     e.parent()
@@ -185,19 +193,19 @@ fn ensure_required_assets(ws: &PathBuf) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn launch_game(
-    app: tauri::AppHandle,
-    workspace_id: String,
-    player_name: String,
+pub async fn prepare_launch(
+    app: &tauri::AppHandle,
+    workspace_id: &str,
+    player_name: &str,
     java_path: Option<String>,
-) -> Result<u32, String> {
-    let ws = wd(&workspace_id);
-    sync_workspace_mods(workspace_id.clone())?;
+) -> Result<PreparedLaunch, String> {
+    let ws = wd(workspace_id);
+    sync_workspace_mods(workspace_id.to_string())?;
     let pk = ws.join("pack.json");
     let c = std::fs::read_to_string(&pk).map_err(|e| format!("read {e}"))?;
     let cfg: serde_json::Value = serde_json::from_str(&c).map_err(|e| format!("parse {e}"))?;
     let mc_ver = cfg["mc_version"].as_str().unwrap_or("1.21").to_string();
-    let _ = ensure_workspace_runtime(&app, &workspace_id, &mc_ver).await?;
+    let _ = ensure_workspace_runtime(app, workspace_id, &mc_ver).await?;
     let cj = ws.join("versions").join("client.jar");
     if !cj.exists() {
         return Err("no client.jar".into());
@@ -314,16 +322,34 @@ pub async fn launch_game(
     }
     let lc = b.build();
 
-    let u = OfflineUser::new(&player_name);
+    let u = OfflineUser::new(player_name);
     let built = OfflineLauncher.build_command(&lc, &u);
-    let program = built.get_program().to_os_string();
+    let program = built.get_program().to_string_lossy().to_string();
     let args = built
         .get_args()
         .map(|a| a.to_string_lossy().to_string())
         .collect::<Vec<_>>();
     let argfile = write_java_argfile(&ws, &args)?;
-    let mut cmd = std::process::Command::new(program.clone());
-    cmd.arg(format!("@{}", argfile.to_string_lossy()));
+
+    Ok(PreparedLaunch {
+        workspace_dir: ws,
+        program,
+        argfile_path: argfile,
+        libraries_count: libraries.len(),
+        has_fabric_loader,
+    })
+}
+
+#[tauri::command]
+pub async fn launch_game(
+    app: tauri::AppHandle,
+    workspace_id: String,
+    player_name: String,
+    java_path: Option<String>,
+) -> Result<u32, String> {
+    let prepared = prepare_launch(&app, &workspace_id, &player_name, java_path).await?;
+    let mut cmd = std::process::Command::new(&prepared.program);
+    cmd.arg(format!("@{}", prepared.argfile_path.to_string_lossy()));
 
     // Log command (argfile style)
     app.emit(
@@ -332,10 +358,10 @@ pub async fn launch_game(
             "state":"log",
             "message": format!(
                 "{} @{} (libraries: {}, fabric_loader: {})",
-                program.to_string_lossy(),
-                argfile.display(),
-                libraries.len(),
-                if has_fabric_loader { "yes" } else { "no" }
+                prepared.program,
+                prepared.argfile_path.display(),
+                prepared.libraries_count,
+                if prepared.has_fabric_loader { "yes" } else { "no" }
             )
         }),
     )
@@ -343,33 +369,63 @@ pub async fn launch_game(
 
     cmd.stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
-    cmd.current_dir(&ws);
+    cmd.current_dir(&prepared.workspace_dir);
 
-    let mut ch = cmd.spawn().map_err(|e| {
-        format!(
-            "启动游戏进程失败 (java: {}): {e}",
-            program.to_string_lossy()
-        )
-    })?;
+    let mut ch = cmd
+        .spawn()
+        .map_err(|e| format!("启动游戏进程失败 (java: {}): {e}", prepared.program))?;
     let pid = ch.id();
     let a2 = app.clone();
     std::thread::spawn(move || {
         use std::io::Read;
-        if let Some(mut se) = ch.stderr.take() {
-            let mut bf = [0u8; 4096];
-            while let Ok(n) = se.read(&mut bf) {
-                if n == 0 {
-                    break;
+        let stdout = ch.stdout.take();
+        let stderr = ch.stderr.take();
+
+        let stdout_app = a2.clone();
+        let stdout_thread = stdout.map(|mut so| {
+            std::thread::spawn(move || {
+                let mut bf = [0u8; 4096];
+                while let Ok(n) = so.read(&mut bf) {
+                    if n == 0 {
+                        break;
+                    }
+                    let t = String::from_utf8_lossy(&bf[..n]).to_string();
+                    stdout_app
+                        .emit(
+                            "game-status",
+                            serde_json::json!({"state":"stdout","message":t}),
+                        )
+                        .ok();
                 }
-                let t = String::from_utf8_lossy(&bf[..n]).to_string();
-                a2.emit(
-                    "game-status",
-                    serde_json::json!({"state":"stderr","message":t}),
-                )
-                .ok();
-            }
-        }
+            })
+        });
+
+        let stderr_thread = stderr.map(|mut se| {
+            let stderr_app = a2.clone();
+            std::thread::spawn(move || {
+                let mut bf = [0u8; 4096];
+                while let Ok(n) = se.read(&mut bf) {
+                    if n == 0 {
+                        break;
+                    }
+                    let t = String::from_utf8_lossy(&bf[..n]).to_string();
+                    stderr_app
+                        .emit(
+                            "game-status",
+                            serde_json::json!({"state":"stderr","message":t}),
+                        )
+                        .ok();
+                }
+            })
+        });
+
         let _ = ch.wait();
+        if let Some(handle) = stdout_thread {
+            let _ = handle.join();
+        }
+        if let Some(handle) = stderr_thread {
+            let _ = handle.join();
+        }
         a2.emit("game-status", serde_json::json!({"state":"stopped"}))
             .ok();
     });

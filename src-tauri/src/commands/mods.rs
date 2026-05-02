@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
 use super::workspace::{PackConfig, WorkspaceMod};
 
@@ -61,6 +62,48 @@ struct ModrinthHashes {
     sha1: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ModUsageType {
+    ClientOnly,
+    ServerOnly,
+    ClientAndServer,
+    DevelopmentOnly,
+    #[default]
+    Unknown,
+}
+
+impl ModUsageType {
+    fn from_str(value: &str) -> Option<Self> {
+        match value.trim().to_lowercase().as_str() {
+            "client_only" => Some(Self::ClientOnly),
+            "server_only" => Some(Self::ServerOnly),
+            "client_and_server" => Some(Self::ClientAndServer),
+            "development_only" => Some(Self::DevelopmentOnly),
+            "unknown" => Some(Self::Unknown),
+            _ => None,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::ClientOnly => "client_only",
+            Self::ServerOnly => "server_only",
+            Self::ClientAndServer => "client_and_server",
+            Self::DevelopmentOnly => "development_only",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Mod {
+    name: String,
+    mod_type: ModUsageType,
+    #[serde(flatten)]
+    project: Map<String, Value>,
+}
+
 fn mmpc_root() -> PathBuf {
     let exe = std::env::current_exe().unwrap_or_default();
     exe.parent()
@@ -84,6 +127,10 @@ fn workspace_mods_dir(id: &str) -> PathBuf {
     workspace_dir(id).join("mods")
 }
 
+fn mods_registry_path() -> PathBuf {
+    mmpc_root().join("mods.json")
+}
+
 fn read_pack_config(id: &str) -> Result<PackConfig, String> {
     let content = std::fs::read_to_string(pack_json_path(id))
         .map_err(|e| format!("读取 pack.json 失败: {e}"))?;
@@ -94,6 +141,22 @@ fn write_pack_config(id: &str, config: &PackConfig) -> Result<(), String> {
     let content =
         serde_json::to_string_pretty(config).map_err(|e| format!("序列化 pack.json 失败: {e}"))?;
     std::fs::write(pack_json_path(id), content).map_err(|e| format!("写入 pack.json 失败: {e}"))
+}
+
+fn read_mod_registry() -> Vec<Mod> {
+    let path = mods_registry_path();
+    if !path.exists() {
+        return Vec::new();
+    }
+    let content = std::fs::read_to_string(&path).unwrap_or_default();
+    serde_json::from_str::<Vec<Mod>>(&content).unwrap_or(vec![])
+}
+
+fn write_mod_registry(registry: &[Mod]) -> Result<(), String> {
+    let path = mods_registry_path();
+    let content = serde_json::to_string_pretty(registry)
+        .map_err(|e| format!("序列化 mods.json 失败: {e}"))?;
+    std::fs::write(path, content).map_err(|e| format!("写入 mods.json 失败: {e}"))
 }
 
 fn sanitize_filename_component(value: &str) -> String {
@@ -179,6 +242,9 @@ fn sync_workspace_mod_links(workspace_id: &str, mods: &[WorkspaceMod]) -> Result
 
     let mut expected = std::collections::HashSet::new();
     for mod_entry in mods {
+        if ModUsageType::from_str(&mod_entry.mod_type) == Some(ModUsageType::ServerOnly) {
+            continue;
+        }
         if mod_entry.file_name.trim().is_empty() {
             continue;
         }
@@ -218,6 +284,113 @@ fn normalize_loader_for_modrinth(loader_type: &str) -> Option<&'static str> {
         "neoforge" => Some("neoforge"),
         _ => None,
     }
+}
+
+fn mod_registry_key(title: &str, mod_name: &str, project_id: &str) -> String {
+    if !title.trim().is_empty() {
+        title.trim().to_string()
+    } else if !mod_name.trim().is_empty() {
+        mod_name.trim().to_string()
+    } else {
+        project_id.to_string()
+    }
+}
+
+fn mod_registry_matches(entry: &Mod, name: &str, project_id: &str) -> bool {
+    if entry.name == name {
+        return true;
+    }
+    entry
+        .project
+        .get("id")
+        .and_then(|value| value.as_str())
+        .map(|value| value == project_id)
+        .unwrap_or(false)
+}
+
+fn side_supported(value: Option<&str>) -> bool {
+    matches!(value, Some("required" | "optional"))
+}
+
+fn infer_mod_usage_type(project: &Value) -> ModUsageType {
+    let client_side = project.get("client_side").and_then(|value| value.as_str());
+    let server_side = project.get("server_side").and_then(|value| value.as_str());
+    let is_library = project
+        .get("categories")
+        .and_then(|value| value.as_array())
+        .map(|values| values.iter().any(|entry| entry.as_str() == Some("library")))
+        .unwrap_or(false);
+
+    let client_supported = side_supported(client_side);
+    let server_supported = side_supported(server_side);
+
+    if client_supported && server_supported {
+        ModUsageType::ClientAndServer
+    } else if client_supported {
+        ModUsageType::ClientOnly
+    } else if server_supported {
+        ModUsageType::ServerOnly
+    } else if is_library
+        || (client_side == Some("unsupported") && server_side == Some("unsupported"))
+    {
+        ModUsageType::DevelopmentOnly
+    } else {
+        ModUsageType::Unknown
+    }
+}
+
+fn upsert_mod_registry_entry(
+    registry_key: &str,
+    project: &Value,
+    mod_type: ModUsageType,
+) -> Result<(), String> {
+    let mut registry = read_mod_registry();
+    let mut object = project
+        .as_object()
+        .cloned()
+        .ok_or_else(|| "Modrinth 项目详情不是对象结构".to_string())?;
+    for key in [
+        "versions",
+        "game_versions",
+        "discord_url",
+        "body",
+        "followers",
+        "gallery",
+        "donation_urls",
+    ] {
+        object.remove(key);
+    }
+    let project_id = object
+        .get("id")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .to_string();
+
+    if let Some(existing) = registry
+        .iter_mut()
+        .find(|entry| mod_registry_matches(entry, registry_key, &project_id))
+    {
+        existing.name = registry_key.to_string();
+        existing.mod_type = mod_type;
+        existing.project = object;
+    } else {
+        registry.push(Mod {
+            name: registry_key.to_string(),
+            mod_type,
+            project: object,
+        });
+    }
+    write_mod_registry(&registry)
+}
+
+fn update_mod_registry_type(registry_key: &str, mod_type: ModUsageType) -> Result<(), String> {
+    let mut registry = read_mod_registry();
+    let entry = registry
+        .iter_mut()
+        .find(|entry| entry.name == registry_key)
+        .ok_or_else(|| format!("mods.json 中未找到模组 {registry_key}"))?;
+    entry.mod_type = mod_type;
+    write_mod_registry(&registry)
 }
 
 async fn fetch_latest_version(
@@ -307,6 +480,7 @@ pub async fn install_modrinth_mod(
     let version_summary = fetch_latest_version(&project_id, &pack.mc_version, loader)
         .await?
         .ok_or_else(|| "未找到匹配当前工作区版本/加载器的模组版本".to_string())?;
+
     let version_id = version_summary.version_id;
     let version_url = format!("https://api.modrinth.com/v2/version/{version_id}");
     let version: ModrinthVersion = reqwest::get(&version_url)
@@ -365,6 +539,12 @@ pub async fn install_modrinth_mod(
         .and_then(|value| value.as_str())
         .unwrap_or(&mod_name)
         .to_string();
+    let registry_key = mod_registry_key(&title, &mod_name, &project_id);
+    let existing_mod_type = read_mod_registry()
+        .into_iter()
+        .find(|entry| mod_registry_matches(entry, &registry_key, &project_id))
+        .map(|entry| entry.mod_type);
+    let mod_type = existing_mod_type.unwrap_or_else(|| infer_mod_usage_type(&project));
 
     let cached_file_name =
         build_cached_mod_filename(&mod_name, &version.version_number, &pack.mc_version);
@@ -391,13 +571,16 @@ pub async fn install_modrinth_mod(
         mc_version: pack.mc_version.clone(),
         file_name: cached_file_name,
         title,
+        mod_type: mod_type.as_str().to_string(),
     };
+
+    upsert_mod_registry_entry(&registry_key, &project, mod_type)?;
 
     pack.mods
         .retain(|item| item.project_id != mod_entry.project_id);
     pack.mods.push(mod_entry.clone());
-    write_pack_config(&workspace_id, &pack)?;
     sync_workspace_mod_links(&workspace_id, &pack.mods)?;
+    write_pack_config(&workspace_id, &pack)?;
     Ok(mod_entry)
 }
 
@@ -405,12 +588,36 @@ pub async fn install_modrinth_mod(
 pub fn remove_workspace_mod(workspace_id: String, project_id: String) -> Result<(), String> {
     let mut pack = read_pack_config(&workspace_id)?;
     pack.mods.retain(|item| item.project_id != project_id);
-    write_pack_config(&workspace_id, &pack)?;
-    sync_workspace_mod_links(&workspace_id, &pack.mods)
+    write_pack_config(&workspace_id, &pack)
 }
 
 #[tauri::command]
 pub fn sync_workspace_mods(workspace_id: String) -> Result<(), String> {
     let pack = read_pack_config(&workspace_id)?;
     sync_workspace_mod_links(&workspace_id, &pack.mods)
+}
+
+#[tauri::command]
+pub fn update_workspace_mod_type(
+    workspace_id: String,
+    project_id: String,
+    mod_type: String,
+) -> Result<WorkspaceMod, String> {
+    let parsed_mod_type =
+        ModUsageType::from_str(&mod_type).ok_or_else(|| format!("无效的模组类型: {mod_type}"))?;
+    let mut pack = read_pack_config(&workspace_id)?;
+    let mod_entry = pack
+        .mods
+        .iter_mut()
+        .find(|item| item.project_id == project_id)
+        .ok_or_else(|| format!("工作区中未找到模组 {project_id}"))?;
+    mod_entry.mod_type = parsed_mod_type.as_str().to_string();
+
+    let registry_key =
+        mod_registry_key(&mod_entry.title, &mod_entry.mod_name, &mod_entry.project_id);
+    update_mod_registry_type(&registry_key, parsed_mod_type)?;
+    let updated = mod_entry.clone();
+
+    write_pack_config(&workspace_id, &pack)?;
+    Ok(updated)
 }

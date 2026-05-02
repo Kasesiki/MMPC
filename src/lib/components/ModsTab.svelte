@@ -1,6 +1,7 @@
 <script lang="ts">
+  import { goto } from "$app/navigation";
   import { invoke } from "@tauri-apps/api/core";
-  import type { ModrinthProjectHit, WorkspaceMod } from "$lib/types";
+  import type { ModrinthProjectHit, ModUsageType, WorkspaceMod } from "$lib/types";
 
   let { workspace }: any = $props();
 
@@ -9,9 +10,18 @@
   let searching = $state(false);
   let installingProjectId = $state("");
   let removingProjectId = $state("");
+  let updatingTypeProjectId = $state("");
   let error = $state("");
   let searchResults = $state<ModrinthProjectHit[]>([]);
   let mods = $state<WorkspaceMod[]>([]);
+
+  const modTypeOptions: Array<{ value: ModUsageType; label: string }> = [
+    { value: "client_only", label: "仅客户端" },
+    { value: "server_only", label: "仅服务端" },
+    { value: "client_and_server", label: "双端可用" },
+    { value: "development_only", label: "仅开发使用" },
+    { value: "unknown", label: "未知" },
+  ];
 
   $effect(() => {
     mods = Array.isArray(workspace?.config?.mods) ? workspace.config.mods : [];
@@ -80,6 +90,26 @@
     return mods.some((item) => item.project_id === projectId);
   }
 
+  async function updateModType(projectId: string, modType: ModUsageType) {
+    if (!workspace?.id || updatingTypeProjectId) return;
+    updatingTypeProjectId = projectId;
+    error = "";
+    try {
+      const updated = await invoke<WorkspaceMod>("update_workspace_mod_type", {
+        workspaceId: workspace.id,
+        projectId,
+        modType,
+      });
+      const next = mods.map((item) => item.project_id === projectId ? updated : item);
+      mods = next;
+      workspace.config = { ...workspace.config, mods: next };
+    } catch (e: any) {
+      error = String(e);
+    } finally {
+      updatingTypeProjectId = "";
+    }
+  }
+
   function closeAddModal() {
     showAddModal = false;
     searchQuery = "";
@@ -91,9 +121,14 @@
 <div class="flex flex-col gap-4">
   <div class="flex items-center justify-between gap-3">
     <h3 class="text-lg font-semibold">模组 ({mods.length})</h3>
-    <button class="btn btn-primary btn-sm" onclick={() => { showAddModal = true; searchResults = []; error = ""; }}>
-      添加
-    </button>
+    <div class="flex items-center gap-2">
+      <button class="btn btn-outline btn-sm" onclick={() => goto("/export")}>
+        导出
+      </button>
+      <button class="btn btn-primary btn-sm" onclick={() => { showAddModal = true; searchResults = []; error = ""; }}>
+        添加
+      </button>
+    </div>
   </div>
 
   {#if error}
@@ -110,6 +145,7 @@
         <tr>
           <th>名称</th>
           <th>版本</th>
+          <th>类型</th>
           <th>MC</th>
           <th>缓存文件</th>
           <th class="w-20"></th>
@@ -120,6 +156,18 @@
           <tr>
             <td class="font-medium">{mod.title || mod.mod_name}</td>
             <td>{mod.mod_version || "-"}</td>
+            <td>
+              <select
+                class="select select-bordered select-xs w-36"
+                value={mod.mod_type || "unknown"}
+                disabled={updatingTypeProjectId === mod.project_id}
+                onchange={(e) => updateModType(mod.project_id, (e.currentTarget as HTMLSelectElement).value as ModUsageType)}
+              >
+                {#each modTypeOptions as option}
+                  <option value={option.value}>{option.label}</option>
+                {/each}
+              </select>
+            </td>
             <td><span class="badge badge-outline badge-sm">{mod.mc_version || workspace.mc_version}</span></td>
             <td class="text-xs break-all">{mod.file_name || "-"}</td>
             <td>

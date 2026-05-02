@@ -1,12 +1,10 @@
-use std::collections::HashMap;
-use std::io::{Cursor, Read};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use futures_util::{stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 use uuid::Uuid;
-use zip::read::ZipArchive;
 
 use super::{LoaderKind, ProgressReporter, RuntimeLayout, RuntimeRequest, RuntimeResult};
 
@@ -109,11 +107,12 @@ struct AssetObject {
     size: u64,
 }
 
-#[derive(Debug, Deserialize)]
-struct ForgeInstallProfile {
-    #[serde(rename = "versionInfo", default)]
-    version_info: Option<serde_json::Value>,
-}
+
+// #[derive(Debug, Deserialize)]
+// struct ForgeInstallProfile {
+//     #[serde(rename = "versionInfo", default)]
+//     version_info: Option<serde_json::Value>,
+// }
 
 #[derive(Clone)]
 struct DownloadTask {
@@ -295,32 +294,6 @@ async fn fetch_json_value(url: &str, label: &str) -> Result<serde_json::Value, S
         .map_err(|e| format!("{label} 解析失败: {e}"))
 }
 
-async fn fetch_bytes_with_fallback(primary: &str, fallback: &str, label: &str) -> Result<Vec<u8>, String> {
-    match reqwest::get(primary).await {
-        Ok(response) => match response.error_for_status() {
-            Ok(success) => success
-                .bytes()
-                .await
-                .map(|v| v.to_vec())
-                .map_err(|e| format!("{label} 读取失败: {e}")),
-            Err(_) => fetch_bytes(fallback, label).await,
-        },
-        Err(_) => fetch_bytes(fallback, label).await,
-    }
-}
-
-async fn fetch_bytes(url: &str, label: &str) -> Result<Vec<u8>, String> {
-    reqwest::get(url)
-        .await
-        .map_err(|e| format!("{label} 请求失败: {e}"))?
-        .error_for_status()
-        .map_err(|e| format!("{label} 状态异常: {e}"))?
-        .bytes()
-        .await
-        .map(|v| v.to_vec())
-        .map_err(|e| format!("{label} 读取失败: {e}"))
-}
-
 async fn fetch_vanilla_version_value(mc_version: &str, prefer_bmclapi: bool) -> Result<serde_json::Value, String> {
     let manifest_url = if prefer_bmclapi { BMCLAPI_MANIFEST_URL } else { MOJANG_MANIFEST_URL };
     let fallback_url = if prefer_bmclapi { MOJANG_MANIFEST_URL } else { BMCLAPI_MANIFEST_URL };
@@ -378,14 +351,14 @@ fn download_url_candidates(url: &str, prefer_bmclapi: bool) -> Vec<String> {
     }
 }
 
-fn mirror_asset_url(hash: &str, prefer_bmclapi: bool) -> String {
-    let subdir = &hash[..2];
-    if prefer_bmclapi {
-        format!("{BMCLAPI_RESOURCES_BASE}/{subdir}/{hash}")
-    } else {
-        format!("{MOJANG_RESOURCES_BASE}/{subdir}/{hash}")
-    }
-}
+// fn mirror_asset_url(hash: &str, prefer_bmclapi: bool) -> String {
+//     let subdir = &hash[..2];
+//     if prefer_bmclapi {
+//         format!("{BMCLAPI_RESOURCES_BASE}/{subdir}/{hash}")
+//     } else {
+//         format!("{MOJANG_RESOURCES_BASE}/{subdir}/{hash}")
+//     }
+// }
 
 fn asset_url_candidates(hash: &str, prefer_bmclapi: bool) -> Vec<String> {
     let subdir = &hash[..2];
@@ -813,30 +786,29 @@ fn should_download_with_sha1(path: &Path, expected_sha1: &str) -> Result<bool, S
     Ok(!file_matches_sha1(path, expected_sha1)?)
 }
 
-fn extract_installer_version_json(bytes: &[u8], label: &str) -> Result<serde_json::Value, String> {
-    let cursor = Cursor::new(bytes.to_vec());
-    let mut zip = ZipArchive::new(cursor).map_err(|e| format!("解析 {label} installer 失败: {e}"))?;
+// fn extract_installer_version_json(bytes: &[u8], label: &str) -> Result<serde_json::Value, String> {
+//     let cursor = Cursor::new(bytes.to_vec());
+//     let mut zip = ZipArchive::new(cursor).map_err(|e| format!("解析 {label} installer 失败: {e}"))?;
 
-    if let Ok(mut file) = zip.by_name("version.json") {
-        let mut content = String::new();
-        file.read_to_string(&mut content)
-            .map_err(|e| format!("读取 {label} version.json 失败: {e}"))?;
-        return serde_json::from_str(&content).map_err(|e| format!("解析 {label} version.json 失败: {e}"));
-    }
+//     if let Ok(mut file) = zip.by_name("version.json") {
+//         let mut content = String::new();
+//         file.read_to_string(&mut content)
+//             .map_err(|e| format!("读取 {label} version.json 失败: {e}"))?;
+//         return serde_json::from_str(&content).map_err(|e| format!("解析 {label} version.json 失败: {e}"));
+//     }
 
-    if let Ok(mut file) = zip.by_name("install_profile.json") {
-        let mut content = String::new();
-        file.read_to_string(&mut content)
-            .map_err(|e| format!("读取 {label} install_profile.json 失败: {e}"))?;
-        let profile: ForgeInstallProfile = serde_json::from_str(&content)
-            .map_err(|e| format!("解析 {label} install_profile.json 失败: {e}"))?;
-        if let Some(version_info) = profile.version_info {
-            return Ok(version_info);
-        }
-    }
-
-    Err(format!("{label} installer 中未找到可用的 version.json"))
-}
+//     if let Ok(mut file) = zip.by_name("install_profile.json") {
+//         let mut content = String::new();
+//         file.read_to_string(&mut content)
+//             .map_err(|e| format!("读取 {label} install_profile.json 失败: {e}"))?;
+//         let profile: ForgeInstallProfile = serde_json::from_str(&content)
+//             .map_err(|e| format!("解析 {label} install_profile.json 失败: {e}"))?;
+//         if let Some(version_info) = profile.version_info {
+//             return Ok(version_info);
+//         }
+//     }
+//     Err(format!("{label} installer 中未找到可用的 version.json"))
+// }
 
 fn loader_installer_spec(loader: LoaderKind) -> Option<LoaderInstallerSpec> {
     match loader {
@@ -883,6 +855,164 @@ fn generated_client_rel_path(loader: LoaderKind, mc_version: &str, loader_versio
     }
 }
 
+fn known_installer_only_prefixes(loader: LoaderKind) -> &'static [&'static str] {
+    match loader {
+        LoaderKind::Forge => &[
+            "ForgeAutoRenamingTool-",
+            "binarypatcher-",
+            "installertools-",
+            "jarsplitter-",
+            "srgutils-0.4.",
+            "srgutils-0.5.",
+            "client-",
+            "asm-9.2",
+            "asm-9.6",
+            "asm-tree-9.2",
+            "asm-tree-9.6",
+            "asm-commons-9.2",
+            "asm-commons-9.6",
+            "asm-analysis-9.2",
+        ],
+        LoaderKind::NeoForge => &[],
+        _ => &[],
+    }
+}
+
+fn library_dir_has_known_installer_only_jars(
+    libraries_dir: &Path,
+    loader: LoaderKind,
+) -> Result<bool, String> {
+    if !libraries_dir.exists() {
+        return Ok(false);
+    }
+    let prefixes = known_installer_only_prefixes(loader);
+    if prefixes.is_empty() {
+        return Ok(false);
+    }
+
+    for entry in walk_files_recursive(libraries_dir)? {
+        let Some(file_name) = entry.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if prefixes.iter().any(|prefix| file_name.starts_with(prefix)) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn walk_files_recursive(root: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut files = Vec::new();
+    if !root.exists() {
+        return Ok(files);
+    }
+    for entry in std::fs::read_dir(root)
+        .map_err(|e| format!("读取目录失败 ({}): {e}", root.display()))?
+    {
+        let entry = entry.map_err(|e| format!("读取目录项失败 ({}): {e}", root.display()))?;
+        let path = entry.path();
+        if path.is_dir() {
+            files.extend(walk_files_recursive(&path)?);
+        } else {
+            files.push(path);
+        }
+    }
+    Ok(files)
+}
+
+fn extract_ignore_list_prefixes(version_json: &serde_json::Value) -> Vec<String> {
+    version_json
+        .get("arguments")
+        .and_then(|value| value.get("jvm"))
+        .and_then(|value| value.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.as_str())
+        .find_map(|arg| arg.strip_prefix("-DignoreList=").map(str::to_string))
+        .map(|raw| {
+            raw.split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty() && !value.contains("${"))
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn collect_runtime_library_paths(
+    libraries_root: &Path,
+    version_json: &serde_json::Value,
+    generated_client_rel_path: &Path,
+) -> Result<HashSet<PathBuf>, String> {
+    let mut allowed = HashSet::new();
+
+    for lib in version_json
+        .get("libraries")
+        .and_then(|value| value.as_array())
+        .into_iter()
+        .flatten()
+    {
+        if let Some(path) = lib
+            .get("downloads")
+            .and_then(|value| value.get("artifact"))
+            .and_then(|value| value.get("path"))
+            .and_then(|value| value.as_str())
+        {
+            allowed.insert(PathBuf::from(path));
+        }
+    }
+
+    allowed.insert(generated_client_rel_path.to_path_buf());
+
+    let ignore_prefixes = extract_ignore_list_prefixes(version_json);
+    if !ignore_prefixes.is_empty() {
+        for path in walk_files_recursive(libraries_root)? {
+            let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if ignore_prefixes
+                .iter()
+                .any(|prefix| file_name.starts_with(prefix))
+            {
+                let rel = path
+                    .strip_prefix(libraries_root)
+                    .map_err(|e| format!("计算运行时库相对路径失败: {e}"))?;
+                allowed.insert(rel.to_path_buf());
+            }
+        }
+    }
+
+    Ok(allowed)
+}
+
+fn copy_selected_library_paths(
+    src_root: &Path,
+    dest_root: &Path,
+    allowed: &HashSet<PathBuf>,
+) -> Result<(), String> {
+    std::fs::create_dir_all(dest_root)
+        .map_err(|e| format!("创建目录失败 ({}): {e}", dest_root.display()))?;
+    for rel_path in allowed {
+        let src = src_root.join(rel_path);
+        if !src.is_file() {
+            continue;
+        }
+        let dest = dest_root.join(rel_path);
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("创建目录失败 ({}): {e}", parent.display()))?;
+        }
+        std::fs::copy(&src, &dest).map_err(|e| {
+            format!(
+                "复制运行时库失败 ({} -> {}): {e}",
+                src.display(),
+                dest.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
 fn installer_cache_path(layout: &RuntimeLayout, loader: LoaderKind, mc_version: &str, loader_version: &str) -> PathBuf {
     let filename = match loader {
         LoaderKind::Forge => format!("forge-{}-{}-installer.jar", mc_version, loader_version.trim()),
@@ -912,29 +1042,6 @@ fn find_installed_version_json(install_dir: &Path) -> Result<PathBuf, String> {
         }
     }
     Err("installer 未生成版本 json".into())
-}
-
-fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<(), String> {
-    if !src.exists() {
-        return Ok(());
-    }
-    std::fs::create_dir_all(dest).map_err(|e| format!("创建目录失败 ({}): {e}", dest.display()))?;
-    for entry in std::fs::read_dir(src).map_err(|e| format!("读取目录失败 ({}): {e}", src.display()))? {
-        let entry = entry.map_err(|e| format!("读取目录项失败 ({}): {e}", src.display()))?;
-        let source_path = entry.path();
-        let target_path = dest.join(entry.file_name());
-        if source_path.is_dir() {
-            copy_dir_recursive(&source_path, &target_path)?;
-        } else {
-            if let Some(parent) = target_path.parent() {
-                std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败 ({}): {e}", parent.display()))?;
-            }
-            std::fs::copy(&source_path, &target_path).map_err(|e| {
-                format!("复制文件失败 ({} -> {}): {e}", source_path.display(), target_path.display())
-            })?;
-        }
-    }
-    Ok(())
 }
 
 async fn ensure_loader_runtime_from_installer(
@@ -968,6 +1075,7 @@ async fn ensure_loader_runtime_from_installer(
             .and_then(|value| value.as_str())
             .map(|id| id == expected_id)
             .unwrap_or(false)
+            && !library_dir_has_known_installer_only_jars(&layout.libraries_dir, request.loader)?
         {
             return Ok(cached);
         }
@@ -1027,9 +1135,22 @@ async fn ensure_loader_runtime_from_installer(
     .map_err(|e| format!("解析 installer version.json 失败: {e}"))?;
 
     if layout.libraries_dir.exists() {
-        std::fs::remove_dir_all(&layout.libraries_dir).map_err(|e| format!("清理旧 libraries 目录失败: {e}"))?;
+        std::fs::remove_dir_all(&layout.libraries_dir)
+            .map_err(|e| format!("清理旧 libraries 目录失败: {e}"))?;
     }
-    copy_dir_recursive(&temp_dir.join("libraries"), &layout.libraries_dir)?;
+    let temp_libraries_dir = temp_dir.join("libraries");
+    let allowed_runtime_paths = collect_runtime_library_paths(
+        &temp_libraries_dir,
+        &installed_version_json,
+        generated_client_rel_path(request.loader, &request.mc_version, loader_version)
+            .as_deref()
+            .ok_or_else(|| "无法确定 loader client 相对路径".to_string())?,
+    )?;
+    copy_selected_library_paths(
+        &temp_libraries_dir,
+        &layout.libraries_dir,
+        &allowed_runtime_paths,
+    )?;
 
     if !generated_client_path.is_file() {
         let _ = std::fs::remove_dir_all(&temp_dir);

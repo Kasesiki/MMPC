@@ -44,6 +44,8 @@ pub struct WorkspaceMod {
     pub file_name: String,
     #[serde(default)]
     pub title: String,
+    #[serde(default)]
+    pub mod_type: String,
 }
 
 fn deserialize_workspace_mods<'de, D>(deserializer: D) -> Result<Vec<WorkspaceMod>, D::Error>
@@ -63,6 +65,7 @@ where
                 mc_version: String::new(),
                 file_name: String::new(),
                 title: String::new(),
+                mod_type: "unknown".to_string(),
             }),
             Value::Object(_) => {
                 let parsed = serde_json::from_value::<WorkspaceMod>(item)
@@ -82,6 +85,10 @@ pub struct WorkspaceSummary {
     pub id: String,
     pub name: String,
     pub mc_version: String,
+    #[serde(default)]
+    pub loader_type: String,
+    #[serde(default)]
+    pub loader_version: Option<String>,
     pub description: String,
     pub mod_count: usize,
     pub last_opened: String,
@@ -185,15 +192,6 @@ pub async fn get_cached_version_manifest() -> Result<VersionManifest, String> {
         .cloned()
 }
 
-pub async fn find_version_manifest_entry(version_id: &str) -> Result<VersionEntry, String> {
-    get_cached_version_manifest()
-        .await?
-        .versions
-        .into_iter()
-        .find(|entry| entry.id == version_id)
-        .ok_or_else(|| format!("未找到 MC 版本 {}", version_id))
-}
-
 // ─── Tauri commands ───
 
 /// List all workspaces by scanning `.MMPC/workspaces/`
@@ -230,6 +228,8 @@ pub fn list_workspaces() -> Result<Vec<WorkspaceSummary>, String> {
                     id: cfg.id,
                     name: cfg.name,
                     mc_version: cfg.mc_version,
+                    loader_type: cfg.loader_type,
+                    loader_version: cfg.loader_version,
                     description: cfg.description,
                     mod_count: cfg.mods.len(),
                     last_opened: cfg.last_opened,
@@ -302,6 +302,8 @@ pub fn create_workspace(
         id: cfg.id,
         name: cfg.name,
         mc_version: cfg.mc_version,
+        loader_type: cfg.loader_type,
+        loader_version: cfg.loader_version,
         description: cfg.description,
         mod_count: 0,
         last_opened: cfg.last_opened,

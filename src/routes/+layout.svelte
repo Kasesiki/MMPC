@@ -102,6 +102,7 @@
       <ul class="menu menu-md rounded-box flex-1">
         <li class="menu-title">导航</li>
         <li><a href="/">📦 工作区</a></li>
+        <li><a href="/export">🧰 导出</a></li>
         <li><a href="/java">☕ Java 管理</a></li>
         <li><a href="/settings">⚙️ 设置</a></li>
       </ul>

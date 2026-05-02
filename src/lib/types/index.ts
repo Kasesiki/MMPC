@@ -18,7 +18,15 @@ export interface WorkspaceMod {
   mc_version: string;
   file_name: string;
   title?: string;
+  mod_type?: ModUsageType;
 }
+
+export type ModUsageType =
+  | "client_only"
+  | "server_only"
+  | "client_and_server"
+  | "development_only"
+  | "unknown";
 
 export interface ModrinthProjectHit {
   project_id: string;
@@ -51,6 +59,8 @@ export interface Workspace {
   id: string;
   name: string;
   mc_version: string;
+  loader_type?: string;
+  loader_version?: string | null;
   description: string;
   mod_count: number;
   config: PackConfig;
