@@ -1,8 +1,11 @@
 use super::download::ensure_workspace_runtime;
 use super::java::resolve_java_path_by_id;
+use super::mods::sync_workspace_mods;
 use mc_launcher_core::auth::offline::OfflineUser;
 use mc_launcher_core::launch::offline::{LaunchConfig, OfflineLauncher};
-use mc_launcher_core::launch::version::{merge_version_metadata, parse_version_metadata};
+use mc_launcher_core::launch::version::{
+    default_logging_config_path, merge_version_chain, parse_version_metadata,
+};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -189,6 +192,7 @@ pub async fn launch_game(
     java_path: Option<String>,
 ) -> Result<u32, String> {
     let ws = wd(&workspace_id);
+    sync_workspace_mods(workspace_id.clone())?;
     let pk = ws.join("pack.json");
     let c = std::fs::read_to_string(&pk).map_err(|e| format!("read {e}"))?;
     let cfg: serde_json::Value = serde_json::from_str(&c).map_err(|e| format!("parse {e}"))?;
@@ -251,23 +255,23 @@ pub async fn launch_game(
         .map_err(|e| format!("读取 version.json 失败: {e}"))?;
     let version_meta = serde_json::from_str::<serde_json::Value>(&version_meta_raw)
         .map_err(|e| format!("解析 version.json 失败: {e}"))?;
-    let mut parsed_version_metadata = parse_version_metadata(&version_meta_raw)
+    let child_version_metadata = parse_version_metadata(&version_meta_raw)
         .map_err(|e| format!("解析启动元数据失败: {e}"))?;
-    if let Some(parent_id) = parsed_version_metadata.inherits_from.clone() {
+    let mut version_chain = Vec::new();
+    if let Some(parent_id) = child_version_metadata.inherits_from.clone() {
         let parent_version_json_path = ws.join("versions").join(format!("{parent_id}.json"));
         if parent_version_json_path.exists() {
             let parent_raw = std::fs::read_to_string(&parent_version_json_path)
                 .map_err(|e| format!("读取父级 version.json 失败: {e}"))?;
             let parent_metadata = parse_version_metadata(&parent_raw)
                 .map_err(|e| format!("解析父级启动元数据失败: {e}"))?;
-            parsed_version_metadata =
-                merge_version_metadata(&parent_metadata, &parsed_version_metadata);
+            version_chain.push(parent_metadata);
         }
     }
+    version_chain.push(child_version_metadata);
+    let parsed_version_metadata =
+        merge_version_chain(&version_chain).map_err(|e| format!("合并启动元数据失败: {e}"))?;
     let asset_index_id = version_meta["assetIndex"]["id"].as_str().unwrap_or(&mc_ver);
-    let main_class = version_meta["mainClass"]
-        .as_str()
-        .unwrap_or("net.minecraft.client.main.Main");
     let mx = cfg["max_memory_mb"].as_u64().unwrap_or(4096);
     let mi = cfg["min_memory_mb"].as_u64().unwrap_or(1024);
     let w = cfg["window_width"].as_u64().unwrap_or(1280) as u32;
@@ -275,18 +279,28 @@ pub async fn launch_game(
 
     // assetsDir should point to the root that contains objects/
     let assets_dir = mm().join("assets");
+    let library_dir = ws.join("versions").join("libraries");
+    let natives_dir = ws.join("natives");
+    let logging_config = parsed_version_metadata
+        .logging
+        .as_ref()
+        .and_then(|logging| default_logging_config_path(&ws.join("versions"), logging));
 
     let mut b = LaunchConfig::builder()
         .java_path(&jv)
+        .version_metadata(parsed_version_metadata)
         .minecraft_jar(ps(&cj))
-        .main_class(main_class)
         .game_dir(ps(&ws))
         .assets_dir(ps(&assets_dir))
         .asset_index(asset_index_id)
+        .library_dir(&library_dir)
+        .natives_dir(&natives_dir)
         .max_mem(&format!("{mx}M"))
         .min_mem(&format!("{mi}M"))
-        .version_metadata(parsed_version_metadata)
         .resolution(w, h);
+    if let Some(logging_config) = logging_config {
+        b = b.logging_config(logging_config);
+    }
     for a in &ja {
         b = b.add_jvm_arg(a);
     }
@@ -351,4 +365,35 @@ pub async fn launch_game(
             .ok();
     });
     Ok(pid)
+}
+
+#[tauri::command]
+pub fn stop_game(pid: u32) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        let status = std::process::Command::new("kill")
+            .arg("-TERM")
+            .arg(pid.to_string())
+            .status()
+            .map_err(|e| format!("执行 kill 失败: {e}"))?;
+        if status.success() {
+            return Ok(());
+        }
+        return Err(format!("终止游戏进程失败，退出码: {:?}", status.code()));
+    }
+
+    #[cfg(windows)]
+    {
+        let status = std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .status()
+            .map_err(|e| format!("执行 taskkill 失败: {e}"))?;
+        if status.success() {
+            return Ok(());
+        }
+        return Err(format!("终止游戏进程失败，退出码: {:?}", status.code()));
+    }
+
+    #[allow(unreachable_code)]
+    Err("当前平台暂不支持关闭游戏进程".into())
 }

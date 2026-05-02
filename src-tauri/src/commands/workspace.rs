@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use tokio::sync::OnceCell;
 
 // ─── Data structures ───
@@ -20,7 +21,8 @@ pub struct PackConfig {
     #[serde(default)]
     pub loader_version: Option<String>,
     pub description: String,
-    pub mods: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_workspace_mods")]
+    pub mods: Vec<WorkspaceMod>,
     pub jvm_args: Vec<String>,
     #[serde(default)]
     pub java_runtime_id: Option<String>,
@@ -30,6 +32,48 @@ pub struct PackConfig {
     pub window_height: u32,
     pub created_at: String,
     pub last_opened: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceMod {
+    pub project_id: String,
+    pub version_id: String,
+    pub mod_name: String,
+    pub mod_version: String,
+    pub mc_version: String,
+    pub file_name: String,
+    #[serde(default)]
+    pub title: String,
+}
+
+fn deserialize_workspace_mods<'de, D>(deserializer: D) -> Result<Vec<WorkspaceMod>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = Option::<Vec<Value>>::deserialize(deserializer)?.unwrap_or_default();
+    let mut mods = Vec::new();
+
+    for item in raw {
+        match item {
+            Value::String(project_id) => mods.push(WorkspaceMod {
+                project_id,
+                version_id: String::new(),
+                mod_name: String::new(),
+                mod_version: String::new(),
+                mc_version: String::new(),
+                file_name: String::new(),
+                title: String::new(),
+            }),
+            Value::Object(_) => {
+                let parsed = serde_json::from_value::<WorkspaceMod>(item)
+                    .map_err(serde::de::Error::custom)?;
+                mods.push(parsed);
+            }
+            _ => {}
+        }
+    }
+
+    Ok(mods)
 }
 
 /// Info sent to the frontend for listing

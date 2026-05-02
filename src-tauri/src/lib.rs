@@ -1,6 +1,6 @@
 mod commands;
 
-use commands::{download, java, launch, settings, workspace};
+use commands::{download, java, launch, mods, settings, workspace};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -16,8 +16,13 @@ pub fn run() {
             workspace::delete_workspace,
             workspace::save_pack_config,
             workspace::get_pack_config,
+            mods::search_modrinth_mods,
+            mods::install_modrinth_mod,
+            mods::remove_workspace_mod,
+            mods::sync_workspace_mods,
             download::download_mc_version,
             launch::launch_game,
+            launch::stop_game,
             java::list_java_runtimes,
             java::detect_java_runtime,
             java::add_java_runtime,

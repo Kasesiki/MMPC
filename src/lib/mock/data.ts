@@ -2,6 +2,7 @@ import type {
   Workspace,
   Mod,
   PackConfig,
+  WorkspaceMod,
 } from "$lib/types";
 
 // ─── Mock mods ───
@@ -54,6 +55,19 @@ export const mockMods: Mod[] = [
   },
 ];
 
+function mockWorkspaceMod(id: string): WorkspaceMod {
+  const found = mockMods.find((mod) => mod.id === id);
+  return {
+    project_id: id,
+    version_id: `${id}-version`,
+    mod_name: found?.id || id,
+    mod_version: found?.version || "1.0.0",
+    mc_version: found?.mc_version || "1.21",
+    file_name: `${id}_${found?.version || "1.0.0"}_${found?.mc_version || "1.21"}.jar`,
+    title: found?.name || id,
+  };
+}
+
 // ─── Mock pack config ───
 
 export function mockPackConfig(overrides?: Partial<PackConfig>): PackConfig {
@@ -61,7 +75,7 @@ export function mockPackConfig(overrides?: Partial<PackConfig>): PackConfig {
     name: "我的整合包",
     description: "一个高性能 Minecraft 整合包，包含优化与内容模组",
     mc_version: "1.21",
-    mods: ["sodium", "lithium", "jei"],
+    mods: ["sodium", "lithium", "jei"].map(mockWorkspaceMod),
     jvm_args: ["-XX:+UseG1GC", "-Dsun.rmi.dgc.server.gcInterval=2147483646"],
     min_memory_mb: 1024,
     max_memory_mb: 4096,
@@ -85,7 +99,7 @@ export function mockWorkspaces(): Workspace[] {
       config: mockPackConfig({
         name: "性能优化包",
         description: "使用 Sodium + Lithium 大幅提升帧率，适合低配电脑",
-        mods: ["sodium", "lithium"],
+        mods: ["sodium", "lithium"].map(mockWorkspaceMod),
       }),
       last_opened: "2024-12-28T10:30:00Z",
       created_at: "2024-12-20T08:00:00Z",
@@ -101,7 +115,7 @@ export function mockWorkspaces(): Workspace[] {
         name: "机械冒险",
         description: "以 Create 模组为核心的机械 + 探索整合包",
         mc_version: "1.20.1",
-        mods: ["create", "jei"],
+        mods: ["create", "jei"].map(mockWorkspaceMod),
       }),
       last_opened: "2024-12-27T15:00:00Z",
       created_at: "2024-12-15T12:00:00Z",
@@ -116,7 +130,7 @@ export function mockWorkspaces(): Workspace[] {
       config: mockPackConfig({
         name: "光影展示",
         description: "Iris 光影展示包，体验顶级视觉特效",
-        mods: ["iris", "sodium"],
+        mods: ["iris", "sodium"].map(mockWorkspaceMod),
         max_memory_mb: 8192,
       }),
       last_opened: "2024-12-25T09:00:00Z",

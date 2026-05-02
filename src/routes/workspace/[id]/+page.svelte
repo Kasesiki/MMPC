@@ -35,7 +35,10 @@
     const unsub = workspaces.subscribe(list => { ws = list.find(w => w.id === id) ?? null; });
 
     // Load full config
-    invoke("get_pack_config", { id }).then((cfg: any) => { fullCfg = cfg; }).catch(() => {});
+    invoke("get_pack_config", { id }).then((cfg: any) => {
+      fullCfg = cfg;
+      if (ws) ws = { ...ws, config: cfg };
+    }).catch(() => {});
     invoke<JavaRuntime[]>("list_java_runtimes").then((list) => { javaList = list; }).catch(() => {});
     listReleaseVersions().then((versions) => {
       if (versions.length > 0) {
@@ -47,12 +50,23 @@
     const unlisten = listen<any>("download-progress", (e) => {
       dlCurrent = Number(e.payload?.current ?? 0);
       dlTotal = Number(e.payload?.total ?? 0);
+      const stage = String(e.payload?.stage ?? "启动中");
+      const current = Number(e.payload?.current ?? 0);
+      const total = Number(e.payload?.total ?? 0);
+      launchStatus.update((prev) => prev.state === "launching"
+        ? { state: "launching", stage, current, total }
+        : prev
+      );
     });
     const unlistenGame = listen<any>("game-status", (e) => {
       const state = e.payload?.state;
       const message = e.payload?.message;
       if (state === "log" && message) {
         gameLogs = [String(message), ...gameLogs].slice(0, 40);
+        launchStatus.update((prev) => prev.state === "launching"
+          ? { ...prev, stage: String(message) }
+          : prev
+        );
       } else if (state === "stderr" && message) {
         gameLogs = [`[stderr] ${String(message)}`, ...gameLogs].slice(0, 40);
       } else if (state === "stopped") {
@@ -68,6 +82,10 @@
     downloading = true;
     dlCurrent = 0;
     dlTotal = 0;
+    launchStatus.update((prev) => prev.state === "launching"
+      ? { state: "launching", stage: "开始校验运行时", current: 0, total: 0 }
+      : prev
+    );
     try {
       await invoke("download_mc_version", { workspaceId: ws.id, mcVersion: ws.mc_version });
     } catch (e: any) {
@@ -118,6 +136,7 @@
     try {
       await savePackConfig(ws.id, nextCfg as unknown as Record<string, unknown>);
       fullCfg = nextCfg;
+      ws = { ...ws, config: nextCfg };
       await invoke("get_pack_config", { id: ws.id }).then((cfg: any) => { fullCfg = cfg; });
       await invoke<Workspace[]>("list_workspaces").then((list) => {
         workspaces.set(list);

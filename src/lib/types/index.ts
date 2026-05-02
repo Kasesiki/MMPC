@@ -10,6 +10,37 @@ export interface Mod {
   file_size?: number;
 }
 
+export interface WorkspaceMod {
+  project_id: string;
+  version_id: string;
+  mod_name: string;
+  mod_version: string;
+  mc_version: string;
+  file_name: string;
+  title?: string;
+}
+
+export interface ModrinthVersionSummary {
+  version_id: string;
+  version_number: string;
+  game_versions: string[];
+  loaders: string[];
+  file_name: string;
+  download_url: string;
+  size: number;
+  sha1?: string | null;
+}
+
+export interface ModrinthSearchResult {
+  project_id: string;
+  slug: string;
+  title: string;
+  description: string;
+  downloads: number;
+  icon_url?: string | null;
+  latest_version?: ModrinthVersionSummary | null;
+}
+
 export interface PackConfig {
   id?: string;
   name: string;
@@ -17,7 +48,7 @@ export interface PackConfig {
   mc_version: McVersion;
   loader_type?: string;
   loader_version?: string | null;
-  mods: string[];
+  mods: WorkspaceMod[];
   jvm_args: string[];
   java_runtime_id?: string | null;
   min_memory_mb: number;
@@ -42,7 +73,7 @@ export interface Workspace {
 
 export type LaunchStatus =
   | { state: "idle" }
-  | { state: "launching" }
+  | { state: "launching"; stage?: string; current?: number; total?: number }
   | { state: "running"; pid: number }
   | { state: "error"; message: string };
 
