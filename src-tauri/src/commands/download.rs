@@ -5,7 +5,7 @@ use mc_launcher_core::runtime::{
 };
 use tauri::Emitter;
 
-use super::java::resolve_java_path_by_id;
+use super::java::resolve_launch_java_path;
 use super::settings::load_settings;
 use super::workspace::PackConfig;
 
@@ -51,11 +51,8 @@ fn read_pack_config(id: &str) -> Result<PackConfig, String> {
     serde_json::from_str(&content).map_err(|e| format!("解析 pack.json 失败: {e}"))
 }
 
-fn resolve_workspace_java_path(pack: &PackConfig) -> String {
-    pack.java_runtime_id
-        .as_deref()
-        .and_then(|id| resolve_java_path_by_id(id).ok().flatten())
-        .unwrap_or_else(|| "java".to_string())
+fn resolve_workspace_java_path(pack: &PackConfig) -> Result<String, String> {
+    resolve_launch_java_path(pack.java_runtime_id.as_deref())
 }
 
 fn build_runtime_layout(workspace_id: &str) -> RuntimeLayout {
@@ -96,7 +93,7 @@ pub async fn ensure_workspace_runtime(
             mc_version: mc_version.to_string(),
             loader: LoaderKind::from_str(&pack.loader_type),
             loader_version: pack.loader_version.clone(),
-            java_path: resolve_workspace_java_path(&pack),
+            java_path: resolve_workspace_java_path(&pack)?,
             download_concurrency: settings.download_pool_size.max(1),
             prefer_bmclapi: true,
         },

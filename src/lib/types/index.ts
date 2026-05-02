@@ -20,25 +20,13 @@ export interface WorkspaceMod {
   title?: string;
 }
 
-export interface ModrinthVersionSummary {
-  version_id: string;
-  version_number: string;
-  game_versions: string[];
-  loaders: string[];
-  file_name: string;
-  download_url: string;
-  size: number;
-  sha1?: string | null;
-}
-
-export interface ModrinthSearchResult {
+export interface ModrinthProjectHit {
   project_id: string;
   slug: string;
   title: string;
   description: string;
   downloads: number;
   icon_url?: string | null;
-  latest_version?: ModrinthVersionSummary | null;
 }
 
 export interface PackConfig {

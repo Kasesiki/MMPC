@@ -118,7 +118,7 @@ struct ForgeInstallProfile {
 #[derive(Clone)]
 struct DownloadTask {
     label: String,
-    url: String,
+    urls: Vec<String>,
     dest: PathBuf,
     sha1: String,
 }
@@ -238,7 +238,7 @@ pub async fn prepare_runtime(
         if should_download {
             asset_tasks.push(DownloadTask {
                 label: format!("下载 asset {hash}"),
-                url: mirror_asset_url(hash, request.prefer_bmclapi),
+                urls: asset_url_candidates(hash, request.prefer_bmclapi),
                 dest: asset_path,
                 sha1: hash.clone(),
             });
@@ -368,12 +368,41 @@ fn rewrite_download_url(url: &str, prefer_bmclapi: bool) -> String {
         .replace(FORGE_MAVEN_BASE, BMCLAPI_FORGE_MAVEN_BASE)
 }
 
+fn download_url_candidates(url: &str, prefer_bmclapi: bool) -> Vec<String> {
+    let primary = rewrite_download_url(url, prefer_bmclapi);
+    let fallback = rewrite_download_url(url, !prefer_bmclapi);
+    if primary == fallback {
+        vec![primary]
+    } else {
+        vec![primary, fallback]
+    }
+}
+
 fn mirror_asset_url(hash: &str, prefer_bmclapi: bool) -> String {
     let subdir = &hash[..2];
     if prefer_bmclapi {
         format!("{BMCLAPI_RESOURCES_BASE}/{subdir}/{hash}")
     } else {
         format!("{MOJANG_RESOURCES_BASE}/{subdir}/{hash}")
+    }
+}
+
+fn asset_url_candidates(hash: &str, prefer_bmclapi: bool) -> Vec<String> {
+    let subdir = &hash[..2];
+    let primary = if prefer_bmclapi {
+        format!("{BMCLAPI_RESOURCES_BASE}/{subdir}/{hash}")
+    } else {
+        format!("{MOJANG_RESOURCES_BASE}/{subdir}/{hash}")
+    };
+    let fallback = if prefer_bmclapi {
+        format!("{MOJANG_RESOURCES_BASE}/{subdir}/{hash}")
+    } else {
+        format!("{BMCLAPI_RESOURCES_BASE}/{subdir}/{hash}")
+    };
+    if primary == fallback {
+        vec![primary]
+    } else {
+        vec![primary, fallback]
     }
 }
 
@@ -610,7 +639,7 @@ fn build_library_tasks(libraries_dir: &Path, version_json: &VersionJson, prefer_
                 if should_download_with_sha1(&dest, &artifact.sha1)? {
                     tasks.push(DownloadTask {
                         label: format!("下载库 {}", lib.name),
-                        url: artifact.url.clone(),
+                        urls: download_url_candidates(&artifact.url, prefer_bmclapi),
                         dest,
                         sha1: artifact.sha1.clone(),
                     });
@@ -631,7 +660,7 @@ fn build_library_tasks(libraries_dir: &Path, version_json: &VersionJson, prefer_
                     if should_download_with_sha1(&dest, &native_entry.sha1)? {
                         tasks.push(DownloadTask {
                             label: format!("下载 natives {}", lib.name),
-                            url: rewrite_download_url(&native_entry.url, prefer_bmclapi),
+                            urls: download_url_candidates(&native_entry.url, prefer_bmclapi),
                             dest,
                             sha1: native_entry.sha1.clone(),
                         });
@@ -654,9 +683,8 @@ async fn ensure_single_download(
 ) -> Result<(), String> {
     if should_download_with_sha1(dest, expected_sha1)? {
         reporter.emit(stage, 0, 1);
-        let primary = rewrite_download_url(url, prefer_bmclapi);
-        let fallback = rewrite_download_url(url, !prefer_bmclapi);
-        download_with_sha1_with_fallback(&primary, &fallback, dest, expected_sha1).await?;
+        let urls = download_url_candidates(url, prefer_bmclapi);
+        download_with_sha1_from_candidates(&urls, dest, expected_sha1).await?;
         reporter.emit(stage, 1, 1);
     } else {
         reporter.emit(stage, 1, 1);
@@ -702,7 +730,7 @@ async fn execute_download_pool(
 async fn download_task_with_retry(task: DownloadTask, max_retries: u32) -> Result<(), String> {
     let mut last_err = String::new();
     for attempt in 1..=max_retries {
-        match download_with_sha1(&task.url, &task.dest, &task.sha1).await {
+        match download_with_sha1_from_candidates(&task.urls, &task.dest, &task.sha1).await {
             Ok(()) => return Ok(()),
             Err(e) => last_err = format!("{} 尝试 {attempt}/{max_retries} 失败: {e}", task.label),
         }
@@ -713,9 +741,11 @@ async fn download_task_with_retry(task: DownloadTask, max_retries: u32) -> Resul
 async fn download_file(url: &str, dest: &Path) -> Result<(), String> {
     let response = reqwest::get(url)
         .await
-        .map_err(|e| format!("请求失败: {e}"))?
-        .error_for_status()
-        .map_err(|e| format!("状态异常: {e}"))?;
+        .map_err(|e| format!("请求失败: {e}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("状态异常: HTTP {}", status.as_u16()));
+    }
     let bytes = response.bytes().await.map_err(|e| format!("读取响应失败: {e}"))?;
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {e}"))?;
@@ -724,12 +754,19 @@ async fn download_file(url: &str, dest: &Path) -> Result<(), String> {
     Ok(())
 }
 
-async fn download_with_sha1_with_fallback(primary: &str, fallback: &str, dest: &Path, expected_sha1: &str) -> Result<(), String> {
-    match download_with_sha1(primary, dest, expected_sha1).await {
-        Ok(()) => Ok(()),
-        Err(_) if primary != fallback => download_with_sha1(fallback, dest, expected_sha1).await,
-        Err(e) => Err(e),
+async fn download_with_sha1_from_candidates(
+    urls: &[String],
+    dest: &Path,
+    expected_sha1: &str,
+) -> Result<(), String> {
+    let mut last_err = String::new();
+    for url in urls {
+        match download_with_sha1(url, dest, expected_sha1).await {
+            Ok(()) => return Ok(()),
+            Err(e) => last_err = format!("源 {} 失败: {e}", url),
+        }
     }
+    Err(last_err)
 }
 
 async fn download_with_sha1(url: &str, dest: &Path, expected_sha1: &str) -> Result<(), String> {
@@ -906,11 +943,8 @@ async fn ensure_loader_runtime_from_installer(
     reporter: &dyn ProgressReporter,
 ) -> Result<serde_json::Value, String> {
     let loader_version = request
-        .loader_version
-        .as_deref()
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .ok_or_else(|| "loader_version 不能为空".to_string())?;
+        .loader_version.as_ref().ok_or("err")?.trim();
+
     let spec = loader_installer_spec(request.loader).ok_or_else(|| "当前 loader 不支持 installer".to_string())?;
 
     let version_json_path = layout.versions_dir.join("version.json");
@@ -943,7 +977,8 @@ async fn ensure_loader_runtime_from_installer(
     if !installer_path.is_file() {
         let (primary, fallback) = installer_urls(request.loader, &request.mc_version, loader_version, request.prefer_bmclapi)?;
         reporter.emit("下载 loader installer", 0, 1);
-        download_with_sha1_with_fallback(&primary, &fallback, &installer_path, "").await?;
+        let urls = if primary == fallback { vec![primary] } else { vec![primary, fallback] };
+        download_with_sha1_from_candidates(&urls, &installer_path, "").await?;
         reporter.emit("下载 loader installer", 1, 1);
     } else {
         reporter.emit("下载 loader installer", 1, 1);

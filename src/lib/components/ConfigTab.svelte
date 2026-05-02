@@ -1,10 +1,5 @@
 <script lang="ts">
-  import {
-    listFabricLoaderVersions,
-    listForgeLoaderVersions,
-    listNeoForgeLoaderVersions
-  } from "$lib/stores/workspace";
-  import type { LoaderVersionOption, PackConfig, Workspace } from "$lib/types";
+  import type { PackConfig, Workspace } from "$lib/types";
 
   let {
     workspace,
@@ -19,54 +14,10 @@
   } = $props();
 
   let saved = $state(false);
-  let loaderVersions = $state<LoaderVersionOption[]>([]);
-  let loadingLoaderVersions = $state(false);
-
-  $effect(() => {
-    if (config.loader_type === "vanilla") {
-      config.loader_version = null;
-    }
-  });
-
-  $effect(() => {
-    if (config.loader_type === "vanilla") {
-      loaderVersions = [];
-      config.loader_version = null;
-      return;
-    }
-
-    loadingLoaderVersions = true;
-    const loaderPromise =
-      config.loader_type === "fabric"
-        ? listFabricLoaderVersions(config.mc_version)
-        : config.loader_type === "forge"
-          ? listForgeLoaderVersions(config.mc_version)
-          : listNeoForgeLoaderVersions(config.mc_version);
-
-    loaderPromise
-      .then((versions) => {
-        loaderVersions = versions;
-        const stable = versions.find((entry) => entry.stable);
-        const fallback = versions[0];
-        const nextVersion = stable?.version ?? fallback?.version ?? "";
-        if (!versions.some((entry) => entry.version === config.loader_version)) {
-          config.loader_version = nextVersion || null;
-        }
-      })
-      .finally(() => {
-        loadingLoaderVersions = false;
-      });
-  });
-
-  function usesLoaderOptions() {
-    return config.loader_type === "fabric" || config.loader_type === "forge" || config.loader_type === "neoforge";
-  }
 
   function normalizedConfig(): PackConfig {
     return {
       ...config,
-      loader_type: config.loader_type || "vanilla",
-      loader_version: config.loader_type === "vanilla" ? null : (config.loader_version?.trim() || null),
       min_memory_mb: Math.max(256, Number(config.min_memory_mb) || 1024),
       max_memory_mb: Math.max(Number(config.min_memory_mb) || 1024, Number(config.max_memory_mb) || 4096),
       window_width: Math.max(640, Number(config.window_width) || 1280),
@@ -96,71 +47,6 @@
         class="input input-bordered w-full"
         bind:value={config.name}
       />
-    </div>
-
-    <!-- MC version -->
-    <div>
-      <label class="label" for="cfg-mcver">
-        <span class="label-text">Minecraft 版本</span>
-      </label>
-      <select
-        id="cfg-mcver"
-        class="select select-bordered w-full"
-        bind:value={config.mc_version}
-      >
-        {#each releaseVersions as version}
-          <option value={version}>{version}</option>
-        {/each}
-      </select>
-    </div>
-
-    <div class="grid grid-cols-2 gap-4">
-      <div>
-        <label class="label" for="cfg-loader-type">
-          <span class="label-text">加载器类型</span>
-        </label>
-        <select
-          id="cfg-loader-type"
-          class="select select-bordered w-full"
-          bind:value={config.loader_type}
-        >
-          <option value="vanilla">Vanilla</option>
-          <option value="fabric">Fabric</option>
-          <option value="forge">Forge</option>
-          <option value="neoforge">NeoForge</option>
-        </select>
-      </div>
-      <div>
-        <label class="label" for="cfg-loader-version">
-          <span class="label-text">加载器版本</span>
-        </label>
-        {#if usesLoaderOptions()}
-          <select
-            id="cfg-loader-version"
-            class="select select-bordered w-full"
-            bind:value={config.loader_version}
-            disabled={loadingLoaderVersions || loaderVersions.length === 0}
-          >
-            {#each loaderVersions as loader}
-              <option value={loader.version}>
-                {loader.version}{loader.stable ? " · stable" : ""}
-              </option>
-            {/each}
-          </select>
-          {#if loadingLoaderVersions}
-            <p class="text-xs text-base-content/50 mt-2">正在加载 Loader 版本列表...</p>
-          {/if}
-        {:else}
-          <input
-            id="cfg-loader-version"
-            type="text"
-            class="input input-bordered w-full"
-            placeholder="如 47.3.0"
-            bind:value={config.loader_version}
-            disabled={config.loader_type === "vanilla"}
-          />
-        {/if}
-      </div>
     </div>
 
     <!-- Description -->

@@ -5,17 +5,6 @@ use serde::{Deserialize, Serialize};
 use super::workspace::{PackConfig, WorkspaceMod};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModrinthSearchResult {
-    pub project_id: String,
-    pub slug: String,
-    pub title: String,
-    pub description: String,
-    pub downloads: u64,
-    pub icon_url: Option<String>,
-    pub latest_version: Option<ModrinthVersionSummary>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModrinthVersionSummary {
     pub version_id: String,
     pub version_number: String,
@@ -32,8 +21,8 @@ struct ModrinthSearchResponse {
     hits: Vec<ModrinthProjectHit>,
 }
 
-#[derive(Debug, Deserialize)]
-struct ModrinthProjectHit {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModrinthProjectHit {
     project_id: String,
     slug: String,
     title: String,
@@ -278,7 +267,7 @@ async fn fetch_latest_version(
 pub async fn search_modrinth_mods(
     workspace_id: String,
     query: String,
-) -> Result<Vec<ModrinthSearchResult>, String> {
+) -> Result<Vec<ModrinthProjectHit>, String> {
     let pack = read_pack_config(&workspace_id)?;
     let facets = if let Some(loader) = normalize_loader_for_modrinth(&pack.loader_type) {
         format!(
@@ -305,37 +294,20 @@ pub async fn search_modrinth_mods(
         .await
         .map_err(|e| format!("解析 Modrinth 搜索结果失败: {e}"))?;
 
-    let mut results = Vec::new();
-    for hit in response.hits {
-        let latest_version = fetch_latest_version(
-            &hit.project_id,
-            &pack.mc_version,
-            normalize_loader_for_modrinth(&pack.loader_type),
-        )
-        .await?;
-
-        results.push(ModrinthSearchResult {
-            project_id: hit.project_id,
-            slug: hit.slug,
-            title: hit.title,
-            description: hit.description,
-            downloads: hit.downloads,
-            icon_url: hit.icon_url,
-            latest_version,
-        });
-    }
-
-    Ok(results)
+    Ok(response.hits)
 }
 
 #[tauri::command]
 pub async fn install_modrinth_mod(
     workspace_id: String,
     project_id: String,
-    version_id: String,
 ) -> Result<WorkspaceMod, String> {
     let mut pack = read_pack_config(&workspace_id)?;
     let loader = normalize_loader_for_modrinth(&pack.loader_type);
+    let version_summary = fetch_latest_version(&project_id, &pack.mc_version, loader)
+        .await?
+        .ok_or_else(|| "未找到匹配当前工作区版本/加载器的模组版本".to_string())?;
+    let version_id = version_summary.version_id;
     let version_url = format!("https://api.modrinth.com/v2/version/{version_id}");
     let version: ModrinthVersion = reqwest::get(&version_url)
         .await

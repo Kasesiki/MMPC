@@ -29,7 +29,7 @@ fn mmpc_root() -> PathBuf {
 }
 
 fn java_json_path() -> PathBuf {
-    mmpc_root().join("java").join("runtimes.json")
+    mmpc_root().join("javaruntimes.json")
 }
 
 fn parse_java_major_version(version_text: &str) -> Option<u32> {
@@ -67,6 +67,25 @@ fn detect_java_version(path: &str) -> Result<DetectJavaResult, String> {
         version_text: first_line,
         major_version: major,
     })
+}
+
+fn java_executable_name() -> &'static str {
+    if cfg!(windows) {
+        "java.exe"
+    } else {
+        "java"
+    }
+}
+
+fn is_valid_java_binary(path: &str) -> bool {
+    if path.trim().is_empty() {
+        return false;
+    }
+    Command::new(path)
+        .arg("-version")
+        .output()
+        .map(|output| output.status.success() || !output.stderr.is_empty())
+        .unwrap_or(false)
 }
 
 fn load_runtimes() -> Result<Vec<JavaRuntime>, String> {
@@ -143,4 +162,33 @@ pub fn delete_java_runtime(id: String) -> Result<(), String> {
 pub fn resolve_java_path_by_id(id: &str) -> Result<Option<String>, String> {
     let list = load_runtimes()?;
     Ok(list.into_iter().find(|r| r.id == id).map(|r| r.path))
+}
+
+pub fn resolve_launch_java_path(runtime_id: Option<&str>) -> Result<String, String> {
+    if let Some(id) = runtime_id {
+        let configured = resolve_java_path_by_id(id)?
+            .ok_or_else(|| format!("未找到已保存的 Java 运行时: {id}"))?;
+        if is_valid_java_binary(&configured) {
+            return Ok(configured);
+        }
+        return Err(format!("已保存的 Java 路径不可用: {configured}"));
+    }
+
+    if let Some(java_home) = std::env::var_os("JAVA_HOME") {
+        let candidate = PathBuf::from(java_home)
+            .join("bin")
+            .join(java_executable_name());
+        if candidate.is_file() {
+            let path = candidate.to_string_lossy().to_string();
+            if is_valid_java_binary(&path) {
+                return Ok(path);
+            }
+        }
+    }
+
+    if is_valid_java_binary("java") {
+        return Ok("java".to_string());
+    }
+
+    Err("未找到可用的 Java 运行时，请先在“Java 管理”中添加可用的 Java".into())
 }

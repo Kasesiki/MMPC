@@ -1,5 +1,5 @@
 use super::download::ensure_workspace_runtime;
-use super::java::resolve_java_path_by_id;
+use super::java::resolve_launch_java_path;
 use super::mods::sync_workspace_mods;
 use mc_launcher_core::auth::offline::OfflineUser;
 use mc_launcher_core::launch::offline::{LaunchConfig, OfflineLauncher};
@@ -244,12 +244,16 @@ pub async fn launch_game(
         .map(String::from),
     );
 
-    let configured_java = cfg["java_runtime_id"]
-        .as_str()
-        .and_then(|id| resolve_java_path_by_id(id).ok().flatten());
-    let jv = java_path
-        .or(configured_java)
-        .unwrap_or_else(|| "java".into());
+    let requested_java = java_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let jv = if let Some(path) = requested_java {
+        path
+    } else {
+        resolve_launch_java_path(cfg["java_runtime_id"].as_str())?
+    };
     let version_json_path = ws.join("versions").join("version.json");
     let version_meta_raw = std::fs::read_to_string(&version_json_path)
         .map_err(|e| format!("读取 version.json 失败: {e}"))?;
@@ -341,7 +345,12 @@ pub async fn launch_game(
         .stderr(std::process::Stdio::piped());
     cmd.current_dir(&ws);
 
-    let mut ch = cmd.spawn().map_err(|e| format!("spawn {e}"))?;
+    let mut ch = cmd.spawn().map_err(|e| {
+        format!(
+            "启动游戏进程失败 (java: {}): {e}",
+            program.to_string_lossy()
+        )
+    })?;
     let pid = ch.id();
     let a2 = app.clone();
     std::thread::spawn(move || {
@@ -372,7 +381,7 @@ pub fn stop_game(pid: u32) -> Result<(), String> {
     #[cfg(unix)]
     {
         let status = std::process::Command::new("kill")
-            .arg("-TERM")
+            .arg("-9")
             .arg(pid.to_string())
             .status()
             .map_err(|e| format!("执行 kill 失败: {e}"))?;

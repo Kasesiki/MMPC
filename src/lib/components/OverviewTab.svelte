@@ -4,6 +4,7 @@ import { launchStatus } from "$lib/stores/workspace";
 
 let {
   workspace,
+  fullConfig,
   downloading = false,
   onconfigjava,
   javaLabel = "默认"
@@ -46,39 +47,55 @@ function launchProgressText() {
   }
   return stage;
 }
+
+function loaderLabel() {
+  const loaderType = String(fullConfig?.loader_type || workspace?.config?.loader_type || "vanilla");
+  const loaderVersion = fullConfig?.loader_version || workspace?.config?.loader_version;
+  if (loaderType === "vanilla") {
+    return "Vanilla";
+  }
+  const title = loaderType === "neoforge"
+    ? "NeoForge"
+    : loaderType.charAt(0).toUpperCase() + loaderType.slice(1);
+  return loaderVersion ? `${title} ${loaderVersion}` : title;
+}
 </script>
 
 <div class="flex flex-col gap-3">
-      {#if status.state === 'running'}
-        <button class="btn btn-error" onclick={handleStop} aria-label="关闭游戏">
-          关闭游戏
-        </button>
-        <p class="text-lg font-medium mt-2">运行中 (PID: {status.pid})</p>
-      {:else if status.state === 'launching'}
-        <button class="btn" disabled>
-          <span class="loading loading-spinner"></span>
-          {launchProgressText()}
-        </button>
-        <p class="text-sm text-base-content/70">{launchProgressText()}</p>
-      {:else}
-        <button class="btn btn-outline" onclick={handleLaunch} aria-label="启动" disabled={downloading}>
-          启动游戏
-        </button>
-        <button class="btn btn-outline btn-sm" onclick={onconfigjava}>
-          配置 Java（当前：{javaLabel}）
-        </button>
-      {/if}
-      {#if status.state === 'error'}
-        <div class="alert alert-error mt-4 max-w-md"><span>{status.message}</span></div>
-      {/if}
-      <div class="mt-4">
+  {#if status.state === 'running'}
+    <button class="btn btn-error" onclick={handleStop} aria-label="关闭游戏">
+      关闭游戏
+    </button>
+    <p class="text-lg font-medium mt-2">运行中 (PID: {status.pid})</p>
+  {:else if status.state === 'launching'}
+    <button class="btn" disabled>
+      <span class="loading loading-spinner"></span>
+      {launchProgressText()}
+    </button>
+    <p class="text-sm text-base-content/70">{launchProgressText()}</p>
+  {:else}
+    <button class="btn btn-outline" onclick={handleLaunch} aria-label="启动" disabled={downloading}>
+      启动游戏
+    </button>
+    <button class="btn btn-outline btn-sm" onclick={onconfigjava}>
+      配置 Java（当前：{javaLabel}）
+    </button>
+  {/if}
+  {#if status.state === 'error'}
+    <div class="alert alert-error mt-4 max-w-md"><span>{status.message}</span></div>
+  {/if}
+  <div class="mt-4">
 
-      </div>     
+  </div>     
 
   <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
     <div class="stat bg-base-200 border border-base-300 rounded-box p-4">
       <div class="stat-title">MC 版本</div>
-      <div class="stat-value text-lg">{workspace.mc_version}</div>
+      <div class="stat-value text-lg">{fullConfig?.mc_version || workspace.mc_version}</div>
+    </div>
+    <div class="stat bg-base-200 border border-base-300 rounded-box p-4">
+      <div class="stat-title">加载器</div>
+      <div class="stat-value text-lg">{loaderLabel()}</div>
     </div>
     <div class="stat bg-base-200 border border-base-300 rounded-box p-4">
       <div class="stat-title">模组</div>
@@ -86,11 +103,11 @@ function launchProgressText() {
     </div>
     <div class="stat bg-base-200 border border-base-300 rounded-box p-4">
       <div class="stat-title">内存</div>
-      <div class="stat-value text-lg">1024M / 4096M</div>
+      <div class="stat-value text-lg">{fullConfig?.min_memory_mb || 1024}M / {fullConfig?.max_memory_mb || 4096}M</div>
     </div>
     <div class="stat bg-base-200 border border-base-300 rounded-box p-4">
-      <div class="stat-title">JVM 参数</div>
-      <div class="stat-value text-lg">默认</div>
+      <div class="stat-title">Java</div>
+      <div class="stat-value text-lg">{javaLabel}</div>
     </div>
   </div>
 </div>

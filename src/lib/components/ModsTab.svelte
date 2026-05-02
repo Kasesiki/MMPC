@@ -1,6 +1,6 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
-  import type { ModrinthSearchResult, WorkspaceMod } from "$lib/types";
+  import type { ModrinthProjectHit, WorkspaceMod } from "$lib/types";
 
   let { workspace }: any = $props();
 
@@ -10,7 +10,7 @@
   let installingProjectId = $state("");
   let removingProjectId = $state("");
   let error = $state("");
-  let searchResults = $state<ModrinthSearchResult[]>([]);
+  let searchResults = $state<ModrinthProjectHit[]>([]);
   let mods = $state<WorkspaceMod[]>([]);
 
   $effect(() => {
@@ -25,7 +25,7 @@
     searching = true;
     error = "";
     try {
-      searchResults = await invoke<ModrinthSearchResult[]>("search_modrinth_mods", {
+      searchResults = await invoke<ModrinthProjectHit[]>("search_modrinth_mods", {
         workspaceId: workspace.id,
         query: searchQuery.trim(),
       });
@@ -37,16 +37,14 @@
     }
   }
 
-  async function addMod(result: ModrinthSearchResult) {
-    const version = result.latest_version;
-    if (!workspace?.id || !version || installingProjectId) return;
-    installingProjectId = result.project_id;
+  async function addMod(hit: ModrinthProjectHit) {
+    if (!workspace?.id || installingProjectId) return;
+    installingProjectId = hit.project_id;
     error = "";
     try {
       const installed = await invoke<WorkspaceMod>("install_modrinth_mod", {
         workspaceId: workspace.id,
-        projectId: result.project_id,
-        versionId: version.version_id,
+        projectId: hit.project_id,
       });
       const next = mods.filter((item) => item.project_id !== installed.project_id);
       next.push(installed);
@@ -80,6 +78,13 @@
 
   function isInstalled(projectId: string) {
     return mods.some((item) => item.project_id === projectId);
+  }
+
+  function closeAddModal() {
+    showAddModal = false;
+    searchQuery = "";
+    searchResults = [];
+    error = "";
   }
 </script>
 
@@ -136,7 +141,16 @@
 {#if showAddModal}
   <div class="modal modal-open">
     <div class="modal-box max-w-4xl">
-      <h3 class="font-bold text-lg mb-4">从 Modrinth 添加模组</h3>
+      <div class="mb-4 flex items-start justify-between gap-4">
+        <h3 class="font-bold text-lg">从 Modrinth 添加模组</h3>
+        <button
+          class="btn btn-ghost btn-sm btn-square text-base-content/55 hover:text-base-content"
+          aria-label="关闭"
+          onclick={closeAddModal}
+        >
+          <span class="text-lg leading-none">X</span>
+        </button>
+      </div>
       <div class="flex gap-2 mb-4">
         <input
           type="text"
@@ -161,20 +175,30 @@
               <div class="card bg-base-200 border border-base-300">
                 <div class="card-body py-4">
                   <div class="flex items-start justify-between gap-4">
-                    <div class="min-w-0">
-                      <div class="font-semibold">{result.title}</div>
-                      <div class="text-sm text-base-content/70 break-words">{result.description}</div>
-                      {#if result.latest_version}
-                        <div class="mt-2 flex flex-wrap gap-2 text-xs text-base-content/60">
-                          <span class="badge badge-outline">{result.latest_version.version_number}</span>
-                          <span class="badge badge-outline">{result.latest_version.game_versions.join(", ")}</span>
-                          <span class="badge badge-outline">{result.latest_version.loaders.join(", ")}</span>
+                    <div class="flex min-w-0 items-start gap-3">
+                      {#if result.icon_url}
+                        <img
+                          src={result.icon_url}
+                          alt={`${result.title} icon`}
+                          class="h-12 w-12 flex-none rounded-xl border border-base-300 bg-base-100 object-cover"
+                          loading="lazy"
+                        />
+                      {:else}
+                        <div class="flex h-12 w-12 flex-none items-center justify-center rounded-xl border border-base-300 bg-base-100 text-sm font-semibold text-base-content/55">
+                          {result.title.slice(0, 1).toUpperCase()}
                         </div>
                       {/if}
+                      <div class="min-w-0">
+                        <div class="font-semibold">{result.title}</div>
+                        <div class="text-sm text-base-content/70 break-words">{result.description}</div>
+                        <div class="mt-2 text-xs text-base-content/45">
+                          下载量 {result.downloads.toLocaleString()}
+                        </div>
+                      </div>
                     </div>
                     <button
                       class="btn btn-primary btn-sm"
-                      disabled={!result.latest_version || isInstalled(result.project_id) || installingProjectId === result.project_id}
+                      disabled={isInstalled(result.project_id) || installingProjectId === result.project_id}
                       onclick={() => addMod(result)}
                     >
                       {#if isInstalled(result.project_id)}
@@ -191,20 +215,6 @@
             {/each}
           </div>
         {/if}
-      </div>
-
-      <div class="modal-action">
-        <button
-          class="btn"
-          onclick={() => {
-            showAddModal = false;
-            searchQuery = "";
-            searchResults = [];
-            error = "";
-          }}
-        >
-          关闭
-        </button>
       </div>
     </div>
   </div>

@@ -470,6 +470,8 @@ pub fn save_pack_config(id: String, config: PackConfig) -> Result<(), String> {
             let previous_loader_type = normalize_loader_type(&previous_cfg.loader_type);
             let previous_loader_version =
                 normalize_loader_version(&previous_loader_type, previous_cfg.loader_version);
+            cfg.loader_type = previous_loader_type.clone();
+            cfg.loader_version = previous_loader_version.clone();
             let version_related_changed = previous_cfg.mc_version != cfg.mc_version
                 || previous_loader_type != cfg.loader_type
                 || previous_loader_version != cfg.loader_version;
