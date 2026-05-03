@@ -45,7 +45,8 @@ fn pack_config_path(id: &str) -> PathBuf {
     workspace_dir(id).join("pack.json")
 }
 
-fn read_pack_config(id: &str) -> Result<PackConfig, String> {
+/// 读取pack.json并返回结构体
+pub fn read_pack_config(id: &str) -> Result<PackConfig, String> {
     let content = std::fs::read_to_string(pack_config_path(id))
         .map_err(|e| format!("读取 pack.json 失败: {e}"))?;
     serde_json::from_str(&content).map_err(|e| format!("解析 pack.json 失败: {e}"))
@@ -68,14 +69,6 @@ fn build_runtime_layout(workspace_id: &str) -> RuntimeLayout {
     }
 }
 
-#[tauri::command]
-pub async fn download_mc_version(
-    app: tauri::AppHandle,
-    workspace_id: String,
-    mc_version: String,
-) -> Result<String, String> {
-    ensure_workspace_runtime(&app, &workspace_id, &mc_version).await
-}
 
 pub async fn ensure_workspace_runtime(
     app: &tauri::AppHandle,

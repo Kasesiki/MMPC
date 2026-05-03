@@ -77,24 +77,6 @@
     return () => { unsub(); unlisten.then(f => f()); unlistenGame.then(f => f()); };
   });
 
-  async function handleDownloadMc() {
-    if (!ws || downloading) return;
-    downloading = true;
-    dlCurrent = 0;
-    dlTotal = 0;
-    launchStatus.update((prev) => prev.state === "launching"
-      ? { state: "launching", stage: "开始校验运行时", current: 0, total: 0 }
-      : prev
-    );
-    try {
-      await invoke("download_mc_version", { workspaceId: ws.id, mcVersion: ws.mc_version });
-    } catch (e: any) {
-      gameLogs = [`[error] 下载失败: ${String(e)}`, ...gameLogs].slice(0, 40);
-    } finally {
-      downloading = false;
-    }
-  }
-
   function currentJavaLabel() {
     if (!fullCfg?.java_runtime_id) return "默认";
     const found = javaList.find((j) => j.id === fullCfg?.java_runtime_id);

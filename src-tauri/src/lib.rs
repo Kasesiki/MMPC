@@ -1,6 +1,6 @@
 mod commands;
 
-use commands::{download, export, java, launch, mods, settings, workspace};
+use commands::{export, java, launch, mods, settings, workspace};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -22,7 +22,6 @@ pub fn run() {
             mods::sync_workspace_mods,
             mods::update_workspace_mod_type,
             export::export_workspace,
-            download::download_mc_version,
             launch::launch_game,
             launch::stop_game,
             java::list_java_runtimes,

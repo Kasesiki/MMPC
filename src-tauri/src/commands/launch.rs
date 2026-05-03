@@ -1,3 +1,5 @@
+use crate::commands::download::read_pack_config;
+
 use super::download::ensure_workspace_runtime;
 use super::java::resolve_launch_java_path;
 use super::mods::sync_workspace_mods;
@@ -192,6 +194,7 @@ fn ensure_required_assets(ws: &PathBuf) -> Result<(), String> {
     Ok(())
 }
 
+/// 同步工作区的mods, 
 #[tauri::command]
 pub async fn prepare_launch(
     app: &tauri::AppHandle,
@@ -200,12 +203,11 @@ pub async fn prepare_launch(
     java_path: Option<String>,
 ) -> Result<PreparedLaunch, String> {
     let ws = wd(workspace_id);
+    // 同步mod
     sync_workspace_mods(workspace_id.to_string())?;
-    let pk = ws.join("pack.json");
-    let c = std::fs::read_to_string(&pk).map_err(|e| format!("read {e}"))?;
-    let cfg: serde_json::Value = serde_json::from_str(&c).map_err(|e| format!("parse {e}"))?;
-    let mc_ver = cfg["mc_version"].as_str().unwrap_or("1.21").to_string();
-    let _ = ensure_workspace_runtime(app, workspace_id, &mc_ver).await?;
+    let mut pack = read_pack_config(workspace_id).map_err(String::from)?;
+    
+    let _ = ensure_workspace_runtime(app, workspace_id, &pack.mc_version).await?;
     let cj = ws.join("versions").join("client.jar");
     if !cj.exists() {
         return Err("no client.jar".into());
@@ -226,15 +228,7 @@ pub async fn prepare_launch(
     prepare_natives_dir(&ws, &libraries)?;
 
     // Collect JVM args
-    let mut ja: Vec<String> = cfg["jvm_args"]
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default();
-    ja.extend(
+    pack.jvm_args.extend(
         [
             "--add-modules",
             "ALL-MODULE-PATH",
@@ -260,7 +254,7 @@ pub async fn prepare_launch(
     let jv = if let Some(path) = requested_java {
         path
     } else {
-        resolve_launch_java_path(cfg["java_runtime_id"].as_str())?
+        resolve_launch_java_path(pack.java_runtime_id.as_deref())?
     };
     let version_json_path = ws.join("versions").join("version.json");
     let version_meta_raw = std::fs::read_to_string(&version_json_path)
@@ -283,11 +277,8 @@ pub async fn prepare_launch(
     version_chain.push(child_version_metadata);
     let parsed_version_metadata =
         merge_version_chain(&version_chain).map_err(|e| format!("合并启动元数据失败: {e}"))?;
-    let asset_index_id = version_meta["assetIndex"]["id"].as_str().unwrap_or(&mc_ver);
-    let mx = cfg["max_memory_mb"].as_u64().unwrap_or(4096);
-    let mi = cfg["min_memory_mb"].as_u64().unwrap_or(1024);
-    let w = cfg["window_width"].as_u64().unwrap_or(1280) as u32;
-    let h = cfg["window_height"].as_u64().unwrap_or(720) as u32;
+    let asset_index_id = version_meta["assetIndex"]["id"].as_str().unwrap_or(&pack.mc_version);
+
 
     // assetsDir should point to the root that contains objects/
     let assets_dir = mm().join("assets");
@@ -307,13 +298,13 @@ pub async fn prepare_launch(
         .asset_index(asset_index_id)
         .library_dir(&library_dir)
         .natives_dir(&natives_dir)
-        .max_mem(&format!("{mx}M"))
-        .min_mem(&format!("{mi}M"))
-        .resolution(w, h);
+        .max_mem(&format!("{}M", pack.max_memory_mb))
+        .min_mem(&format!("{}M", pack.min_memory_mb))
+        .resolution(pack.window_width, pack.window_height);
     if let Some(logging_config) = logging_config {
         b = b.logging_config(logging_config);
     }
-    for a in &ja {
+    for a in &pack.jvm_args {
         b = b.add_jvm_arg(a);
     }
     // Add all library JARs to classpath

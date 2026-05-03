@@ -236,6 +236,8 @@ fn ensure_symlink_or_copy(src: &Path, dest: &Path) -> Result<(), String> {
     }
 }
 
+
+/// Pass 8/10, 验证，清理，连接工作区的mods，保证工作区的mods与传入参数对齐
 fn sync_workspace_mod_links(workspace_id: &str, mods: &[WorkspaceMod]) -> Result<(), String> {
     let mods_dir = workspace_mods_dir(workspace_id);
     std::fs::create_dir_all(&mods_dir).map_err(|e| format!("创建 mods 目录失败: {e}"))?;
@@ -576,6 +578,7 @@ pub async fn install_modrinth_mod(
 
     upsert_mod_registry_entry(&registry_key, &project, mod_type)?;
 
+    //为了不重复
     pack.mods
         .retain(|item| item.project_id != mod_entry.project_id);
     pack.mods.push(mod_entry.clone());
