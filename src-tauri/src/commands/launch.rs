@@ -20,13 +20,16 @@ pub struct PreparedLaunch {
     pub has_fabric_loader: bool,
 }
 
-fn mm() -> PathBuf {
+/// 获取.MMPC路径
+pub fn mm() -> PathBuf {
     let e = std::env::current_exe().unwrap_or_default();
     e.parent()
         .map(|p| p.join(".MMPC"))
         .unwrap_or_else(|| PathBuf::from(".MMPC"))
 }
-fn wd(id: &str) -> PathBuf {
+
+/// 获取workspace的路径
+pub fn wd(id: &str) -> PathBuf {
     mm().join("workspaces").join(id)
 }
 fn ps(p: &PathBuf) -> &str {

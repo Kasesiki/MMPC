@@ -1023,10 +1023,14 @@ fn installer_cache_path(layout: &RuntimeLayout, loader: LoaderKind, mc_version: 
     layout.installers_cache_dir.join(filename)
 }
 
-fn find_installed_version_json(install_dir: &Path) -> Result<PathBuf, String> {
+fn find_installed_version_json(
+    install_dir: &Path,
+    expected_id: &str,
+) -> Result<PathBuf, String> {
     let versions_root = install_dir.join("versions");
     let entries = std::fs::read_dir(&versions_root)
         .map_err(|e| format!("读取 installer versions 目录失败 ({}): {e}", versions_root.display()))?;
+    let mut fallback = None;
     for entry in entries {
         let entry = entry.map_err(|e| format!("读取 installer versions 目录项失败: {e}"))?;
         let dir = entry.path();
@@ -1038,10 +1042,15 @@ fn find_installed_version_json(install_dir: &Path) -> Result<PathBuf, String> {
         };
         let candidate = dir.join(format!("{dir_name}.json"));
         if candidate.is_file() {
-            return Ok(candidate);
+            if dir_name == expected_id {
+                return Ok(candidate);
+            }
+            if fallback.is_none() {
+                fallback = Some(candidate);
+            }
         }
     }
-    Err("installer 未生成版本 json".into())
+    fallback.ok_or_else(|| "installer 未生成版本 json".into())
 }
 
 async fn ensure_loader_runtime_from_installer(
@@ -1127,7 +1136,7 @@ async fn ensure_loader_runtime_from_installer(
         return Err(format!("{label} installer 执行失败: {}", if detail.is_empty() { "未返回可用日志".to_string() } else { detail }));
     }
 
-    let installed_version_json_path = find_installed_version_json(&temp_dir)?;
+    let installed_version_json_path = find_installed_version_json(&temp_dir, &expected_id)?;
     let installed_version_json: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(&installed_version_json_path)
             .map_err(|e| format!("读取 installer version.json 失败: {e}"))?,

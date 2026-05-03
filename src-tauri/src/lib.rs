@@ -19,7 +19,6 @@ pub fn run() {
             mods::search_modrinth_mods,
             mods::install_modrinth_mod,
             mods::remove_workspace_mod,
-            mods::sync_workspace_mods,
             mods::update_workspace_mod_type,
             export::export_workspace,
             download::download_mc_version,

@@ -169,10 +169,6 @@
         <span class="label-text">同时导出工作区使用的 Java</span>
       </label>
 
-      <div class="rounded-2xl border border-base-300 bg-base-100 p-4 text-sm text-base-content/70">
-        导出会在 `.MMPC/tmp` 下创建临时目录，复制依赖、生成 `launch.sh` 和 `launch.bat`，完成后自动打开导出目录。
-      </div>
-
       <div class="flex justify-end">
         <button class="btn btn-primary" onclick={runExport} disabled={!selectedWorkspaceId || exporting}>
           {exporting ? "导出中..." : "开始导出"}
