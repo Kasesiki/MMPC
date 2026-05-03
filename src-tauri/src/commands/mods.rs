@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use crate::commands::launch::{mm, wd};
+
 use super::workspace::{PackConfig, WorkspaceMod};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,33 +106,38 @@ struct Mod {
     project: Map<String, Value>,
 }
 
-fn mmpc_root() -> PathBuf {
-    let exe = std::env::current_exe().unwrap_or_default();
-    exe.parent()
-        .map(|p| p.join(".MMPC"))
-        .unwrap_or_else(|| PathBuf::from(".MMPC"))
+fn registry_entry_by_project_id(project_id: &str) -> Option<Mod> {
+    read_mod_registry().into_iter().find(|entry| {
+        entry
+            .project
+            .get("id")
+            .and_then(|value| value.as_str())
+            .map(|value| value == project_id)
+            .unwrap_or(false)
+    })
 }
 
-fn workspace_dir(id: &str) -> PathBuf {
-    mmpc_root().join("workspaces").join(id)
-}
-
+/// .MMPC/pack.json
 fn pack_json_path(id: &str) -> PathBuf {
-    workspace_dir(id).join("pack.json")
+    wd(id).join("pack.json")
 }
 
+/// .MMPC/modcache
 fn modcache_dir() -> PathBuf {
-    mmpc_root().join("modcache")
+    mm().join("modcache")
 }
 
+/// 获取工作区的mods路径
 fn workspace_mods_dir(id: &str) -> PathBuf {
-    workspace_dir(id).join("mods")
+    wd(id).join("mods")
 }
 
+/// .MMPC/mods.json
 fn mods_registry_path() -> PathBuf {
-    mmpc_root().join("mods.json")
+    mm().join("mods.json")
 }
 
+/// 读取pack.json并解析为结构体
 fn read_pack_config(id: &str) -> Result<PackConfig, String> {
     let content = std::fs::read_to_string(pack_json_path(id))
         .map_err(|e| format!("读取 pack.json 失败: {e}"))?;
@@ -181,7 +188,7 @@ fn build_cached_mod_filename(mod_name: &str, mod_version: &str, mc_version: &str
     )
 }
 
-fn ensure_symlink_or_copy(src: &Path, dest: &Path) -> Result<(), String> {
+fn ensure_symlink(src: &Path, dest: &Path) -> Result<(), String> {
     if dest.exists() {
         let metadata = std::fs::symlink_metadata(dest)
             .map_err(|e| format!("读取 mods 链接失败 ({}): {e}", dest.display()))?;
@@ -222,27 +229,17 @@ fn ensure_symlink_or_copy(src: &Path, dest: &Path) -> Result<(), String> {
             }
         }
     }
-
-    #[allow(unreachable_code)]
-    {
-        std::fs::copy(src, dest).map_err(|e| {
-            format!(
-                "复制模组失败 ({} -> {}): {e}",
-                src.display(),
-                dest.display()
-            )
-        })?;
-        Ok(())
-    }
 }
 
 
 /// Pass 8/10, 验证，清理，连接工作区的mods，保证工作区的mods与传入参数对齐
 fn sync_workspace_mod_links(workspace_id: &str, mods: &[WorkspaceMod]) -> Result<(), String> {
     let mods_dir = workspace_mods_dir(workspace_id);
+    
     std::fs::create_dir_all(&mods_dir).map_err(|e| format!("创建 mods 目录失败: {e}"))?;
 
     let mut expected = std::collections::HashSet::new();
+    
     for mod_entry in mods {
         if ModUsageType::from_str(&mod_entry.mod_type) == Some(ModUsageType::ServerOnly) {
             continue;
@@ -255,7 +252,7 @@ fn sync_workspace_mod_links(workspace_id: &str, mods: &[WorkspaceMod]) -> Result
             continue;
         }
         let link_path = mods_dir.join(&mod_entry.file_name);
-        ensure_symlink_or_copy(&cache_path, &link_path)?;
+        ensure_symlink(&cache_path, &link_path)?;
         expected.insert(mod_entry.file_name.clone());
     }
 
@@ -477,8 +474,10 @@ pub async fn install_modrinth_mod(
     workspace_id: String,
     project_id: String,
 ) -> Result<WorkspaceMod, String> {
-    let mut pack = read_pack_config(&workspace_id)?;
+    let mut pack: PackConfig = read_pack_config(&workspace_id)?;
     let loader = normalize_loader_for_modrinth(&pack.loader_type);
+    let existing_registry_entry = registry_entry_by_project_id(&project_id);
+
     let version_summary = fetch_latest_version(&project_id, &pack.mc_version, loader)
         .await?
         .ok_or_else(|| "未找到匹配当前工作区版本/加载器的模组版本".to_string())?;
@@ -520,40 +519,58 @@ pub async fn install_modrinth_mod(
         .or_else(|| version.files.first())
         .ok_or_else(|| "该模组版本没有可下载文件".to_string())?;
 
-    let project_url = format!("https://api.modrinth.com/v2/project/{project_id}");
-    let project: serde_json::Value = reqwest::get(&project_url)
-        .await
-        .map_err(|e| format!("请求 Modrinth 项目详情失败: {e}"))?
-        .error_for_status()
-        .map_err(|e| format!("Modrinth 项目详情状态异常: {e}"))?
-        .json()
-        .await
-        .map_err(|e| format!("解析 Modrinth 项目详情失败: {e}"))?;
-    let mod_name = project
-        .get("slug")
-        .and_then(|value| value.as_str())
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| project.get("title").and_then(|value| value.as_str()))
-        .unwrap_or(&project_id)
-        .to_string();
-    let title = project
-        .get("title")
-        .and_then(|value| value.as_str())
-        .unwrap_or(&mod_name)
-        .to_string();
-    let registry_key = mod_registry_key(&title, &mod_name, &project_id);
-    let existing_mod_type = read_mod_registry()
-        .into_iter()
-        .find(|entry| mod_registry_matches(entry, &registry_key, &project_id))
-        .map(|entry| entry.mod_type);
-    let mod_type = existing_mod_type.unwrap_or_else(|| infer_mod_usage_type(&project));
+    let (project, mod_name, title, registry_key, mod_type) = if let Some(entry) =
+        existing_registry_entry.clone()
+    {
+        let project = Value::Object(entry.project.clone());
+        let mod_name = project
+            .get("slug")
+            .and_then(|value| value.as_str())
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| project.get("title").and_then(|value| value.as_str()))
+            .unwrap_or(&project_id)
+            .to_string();
+        let title = project
+            .get("title")
+            .and_then(|value| value.as_str())
+            .unwrap_or(&mod_name)
+            .to_string();
+        let registry_key = mod_registry_key(&title, &mod_name, &project_id);
+        (project, mod_name, title, registry_key, entry.mod_type)
+    } else {
+        let project_url = format!("https://api.modrinth.com/v2/project/{project_id}");
+        let project: serde_json::Value = reqwest::get(&project_url)
+            .await
+            .map_err(|e| format!("请求 Modrinth 项目详情失败: {e}"))?
+            .error_for_status()
+            .map_err(|e| format!("Modrinth 项目详情状态异常: {e}"))?
+            .json()
+            .await
+            .map_err(|e| format!("解析 Modrinth 项目详情失败: {e}"))?;
+        let mod_name = project
+            .get("slug")
+            .and_then(|value| value.as_str())
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| project.get("title").and_then(|value| value.as_str()))
+            .unwrap_or(&project_id)
+            .to_string();
+        let title = project
+            .get("title")
+            .and_then(|value| value.as_str())
+            .unwrap_or(&mod_name)
+            .to_string();
+        let registry_key = mod_registry_key(&title, &mod_name, &project_id);
+        let mod_type = infer_mod_usage_type(&project);
+        (project, mod_name, title, registry_key, mod_type)
+    };
 
     let cached_file_name =
         build_cached_mod_filename(&mod_name, &version.version_number, &pack.mc_version);
     let cache_path = modcache_dir().join(&cached_file_name);
     std::fs::create_dir_all(modcache_dir()).map_err(|e| format!("创建 modcache 目录失败: {e}"))?;
+    let should_skip_download = existing_registry_entry.is_some() && cache_path.is_file();
 
-    if !cache_path.is_file() {
+    if !should_skip_download && !cache_path.is_file() {
         let bytes = reqwest::get(&file.url)
             .await
             .map_err(|e| format!("下载模组文件失败: {e}"))?
@@ -581,6 +598,7 @@ pub async fn install_modrinth_mod(
     //为了不重复
     pack.mods
         .retain(|item| item.project_id != mod_entry.project_id);
+    
     pack.mods.push(mod_entry.clone());
     sync_workspace_mod_links(&workspace_id, &pack.mods)?;
     write_pack_config(&workspace_id, &pack)?;
@@ -594,9 +612,8 @@ pub fn remove_workspace_mod(workspace_id: String, project_id: String) -> Result<
     write_pack_config(&workspace_id, &pack)
 }
 
-#[tauri::command]
 pub fn sync_workspace_mods(workspace_id: String) -> Result<(), String> {
-    let pack = read_pack_config(&workspace_id)?;
+    let pack: PackConfig = read_pack_config(&workspace_id)?;
     sync_workspace_mod_links(&workspace_id, &pack.mods)
 }
 

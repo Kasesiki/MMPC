@@ -180,7 +180,7 @@ fn should_include_mod(export_kind: ExportKind, mod_type: &str) -> bool {
     }
 }
 
-fn filter_mods<'a>(mods: &'a [WorkspaceMod], export_kind: ExportKind) -> Vec<&'a WorkspaceMod> {
+fn filter_mods<'a>(mods: &'a Vec<WorkspaceMod>, export_kind: ExportKind) -> Vec<&'a WorkspaceMod> {
     mods.iter()
         .filter(|mod_entry| should_include_mod(export_kind, &mod_entry.mod_type))
         .collect()
