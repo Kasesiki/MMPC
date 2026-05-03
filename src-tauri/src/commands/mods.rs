@@ -1,9 +1,8 @@
 use std::path::{Path, PathBuf};
 
+use mc_launcher_core::runtime::prepare::{mm, wd};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-
-use crate::commands::launch::{mm, wd};
 
 use super::workspace::{PackConfig, WorkspaceMod};
 

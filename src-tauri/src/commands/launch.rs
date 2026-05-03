@@ -8,6 +8,7 @@ use mc_launcher_core::launch::offline::{LaunchConfig, OfflineLauncher};
 use mc_launcher_core::launch::version::{
     default_logging_config_path, merge_version_chain, parse_version_metadata,
 };
+use mc_launcher_core::runtime::prepare::{mm, wd};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -22,18 +23,9 @@ pub struct PreparedLaunch {
     pub has_fabric_loader: bool,
 }
 
-/// 获取.MMPC路径
-pub fn mm() -> PathBuf {
-    let e = std::env::current_exe().unwrap_or_default();
-    e.parent()
-        .map(|p| p.join(".MMPC"))
-        .unwrap_or_else(|| PathBuf::from(".MMPC"))
-}
 
-/// 获取workspace的路径
-pub fn wd(id: &str) -> PathBuf {
-    mm().join("workspaces").join(id)
-}
+
+
 fn ps(p: &PathBuf) -> &str {
     p.to_str().unwrap_or("")
 }

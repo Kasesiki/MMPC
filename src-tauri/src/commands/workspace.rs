@@ -4,6 +4,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use chrono::Utc;
+use mc_launcher_core::runtime::prepare::versions_dir;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::OnceCell;
@@ -137,9 +138,7 @@ fn pack_json_path(id: &str) -> PathBuf {
     workspace_dir(id).join("pack.json")
 }
 
-fn versions_dir(id: &str) -> PathBuf {
-    workspace_dir(id).join("versions")
-}
+
 
 fn natives_dir(id: &str) -> PathBuf {
     workspace_dir(id).join("natives")

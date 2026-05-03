@@ -38,7 +38,6 @@ pub struct RuntimeRequest {
     pub loader_version: Option<String>,
     pub java_path: String,
     pub download_concurrency: usize,
-    pub prefer_bmclapi: bool,
 }
 
 #[derive(Debug, Clone)]

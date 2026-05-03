@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use bmclapi::bmclapi;
 use mc_launcher_core::runtime::LoaderKind;
 use serde::{Deserialize, Serialize};
 use tauri::Emitter;
@@ -341,12 +342,7 @@ async fn fetch_vanilla_server_download(
         .find(|entry| entry.id == mc_version)
         .ok_or_else(|| format!("未找到 MC 版本 {mc_version}"))?;
 
-    let primary_meta = entry
-        .url
-        .replace("https://piston-meta.mojang.com", "https://bmclapi2.bangbang93.com")
-        .replace("https://launchermeta.mojang.com", "https://bmclapi2.bangbang93.com")
-        .replace("https://launcher.mojang.com", "https://bmclapi2.bangbang93.com");
-    let version_value = fetch_json_with_fallback(&primary_meta, &entry.url, "获取 version.json").await?;
+    let version_value = bmclapi::fetch_json_value(&entry.url).await.map_err(|e| e.to_string())?;
     let version_json: VanillaVersionJson = serde_json::from_value(version_value)
         .map_err(|e| format!("解析 version.json 失败: {e}"))?;
     let server = version_json

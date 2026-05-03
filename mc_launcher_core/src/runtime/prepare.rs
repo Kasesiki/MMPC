@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+use bmclapi::bmclapi::replace;
 use futures_util::{stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
@@ -9,13 +10,9 @@ use uuid::Uuid;
 use super::{LoaderKind, ProgressReporter, RuntimeLayout, RuntimeRequest, RuntimeResult};
 
 const MOJANG_MANIFEST_URL: &str = "https://launchermeta.mojang.com/mc/game/version_manifest_v2.json";
-const BMCLAPI_MANIFEST_URL: &str = "https://bmclapi2.bangbang93.com/mc/game/version_manifest_v2.json";
 const MOJANG_RESOURCES_BASE: &str = "https://resources.download.minecraft.net";
-const BMCLAPI_RESOURCES_BASE: &str = "https://bmclapi2.bangbang93.com/assets";
 const MOJANG_LIBRARIES_BASE: &str = "https://libraries.minecraft.net";
-const BMCLAPI_LIBRARIES_BASE: &str = "https://bmclapi2.bangbang93.com/maven";
 const FORGE_MAVEN_BASE: &str = "https://maven.minecraftforge.net";
-const BMCLAPI_FORGE_MAVEN_BASE: &str = "https://bmclapi2.bangbang93.com/maven";
 const NEOFORGE_MAVEN_BASE: &str = "https://maven.neoforged.net/releases";
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -117,7 +114,7 @@ struct AssetObject {
 #[derive(Clone)]
 struct DownloadTask {
     label: String,
-    urls: Vec<String>,
+    urls: String,
     dest: PathBuf,
     sha1: String,
 }
@@ -128,18 +125,52 @@ struct LoaderInstallerSpec {
     install_arg: &'static str,
 }
 
+/// 获取.MMPC路径
+pub fn mm() -> PathBuf {
+    let e = std::env::current_exe().unwrap_or_default();
+    e.parent()
+        .map(|p| p.join(".MMPC"))
+        .unwrap_or_else(|| PathBuf::from(".MMPC"))
+}
+
+/// 获取workspace的路径
+pub fn wd(id: &str) -> PathBuf {
+    mm().join("workspaces").join(id)
+}
+
+pub fn versions_dir(id: &str) -> PathBuf {
+    wd(id).join("versions")
+}
+
+pub fn build_runtime_layout(workspace_id: &str) -> RuntimeLayout {
+    let root = mm();
+    let workspace_dir = wd(workspace_id);
+    RuntimeLayout {
+        workspace_dir: workspace_dir.clone(),
+        versions_dir: versions_dir(workspace_id),
+        libraries_dir: workspace_dir.join("versions").join("libraries"),
+        assets_root: root.join("assets"),
+        installers_cache_dir: root.join("cache").join("installers"),
+        temp_root: root.join("tmp"),
+    }
+}
+
+
 pub async fn prepare_runtime(
-    layout: &RuntimeLayout,
+    workspace_id: &str,
     request: &RuntimeRequest,
     reporter: &dyn ProgressReporter,
 ) -> Result<RuntimeResult, String> {
+
+    // 目录提前创建
+    let layout: RuntimeLayout = build_runtime_layout(workspace_id);
     std::fs::create_dir_all(&layout.versions_dir).map_err(|e| format!("创建 versions 目录失败: {e}"))?;
     std::fs::create_dir_all(&layout.assets_root).map_err(|e| format!("创建 assets 目录失败: {e}"))?;
     std::fs::create_dir_all(&layout.installers_cache_dir)
         .map_err(|e| format!("创建 installer 缓存目录失败: {e}"))?;
     std::fs::create_dir_all(&layout.temp_root).map_err(|e| format!("创建临时目录失败: {e}"))?;
 
-    let base_value = fetch_vanilla_version_value(&request.mc_version, request.prefer_bmclapi).await?;
+    let base_value = fetch_vanilla_version_value(&request.mc_version).await?;
     let inherited_version_json_path = layout.versions_dir.join(format!("{}.json", request.mc_version));
     write_json_pretty(&inherited_version_json_path, &base_value)?;
 
@@ -156,14 +187,14 @@ pub async fn prepare_runtime(
                 .map(str::trim)
                 .filter(|v| !v.is_empty())
                 .ok_or_else(|| "Fabric 缺少 loader_version".to_string())?;
-            let fabric_value = fetch_fabric_version_value(&request.mc_version, loader_version, request.prefer_bmclapi).await?;
+            let fabric_value = fetch_fabric_version_value(&request.mc_version, loader_version).await?;
             let merged = merge_version_json(&base_value, &fabric_value);
             let version_json: VersionJson = serde_json::from_value(merged.clone())
                 .map_err(|e| format!("解析 Fabric version.json 失败: {e}"))?;
             (version_json, merged)
         }
         LoaderKind::Forge | LoaderKind::NeoForge => {
-            let installed_loader_value = ensure_loader_runtime_from_installer(layout, request, reporter).await?;
+            let installed_loader_value = ensure_loader_runtime_from_installer(&layout, request, reporter).await?;
             let merged_download = merge_version_json(&base_value, &installed_loader_value);
             let version_json: VersionJson = serde_json::from_value(merged_download)
                 .map_err(|e| format!("解析 loader 下载元数据失败: {e}"))?;
@@ -181,7 +212,6 @@ pub async fn prepare_runtime(
         &client_path,
         "下载 client.jar",
         &download_version_json.downloads.client.sha1,
-        request.prefer_bmclapi,
     )
     .await?;
 
@@ -192,14 +222,12 @@ pub async fn prepare_runtime(
         &asset_index_path,
         "下载 asset index",
         &download_version_json.asset_index.sha1,
-        request.prefer_bmclapi,
     )
     .await?;
 
     let library_tasks = build_library_tasks(
         &layout.libraries_dir,
         &download_version_json,
-        request.prefer_bmclapi,
     )?;
     execute_download_pool(
         reporter,
@@ -237,7 +265,7 @@ pub async fn prepare_runtime(
         if should_download {
             asset_tasks.push(DownloadTask {
                 label: format!("下载 asset {hash}"),
-                urls: asset_url_candidates(hash, request.prefer_bmclapi),
+                urls: asset_url_candidates(hash),
                 dest: asset_path,
                 sha1: hash.clone(),
             });
@@ -264,42 +292,42 @@ pub async fn prepare_runtime(
     })
 }
 
+
+// 将value写入path
 fn write_json_pretty(path: &Path, value: &serde_json::Value) -> Result<(), String> {
     let content = serde_json::to_string_pretty(value)
         .map_err(|e| format!("序列化 JSON 失败 ({}): {e}", path.display()))?;
     std::fs::write(path, content).map_err(|e| format!("写入 JSON 失败 ({}): {e}", path.display()))
 }
 
-async fn fetch_json_value_with_fallback(primary: &str, fallback: &str, label: &str) -> Result<serde_json::Value, String> {
-    match reqwest::get(primary).await {
-        Ok(response) => match response.error_for_status() {
-            Ok(success) => success
-                .json::<serde_json::Value>()
-                .await
-                .map_err(|e| format!("{label} 解析失败: {e}")),
-            Err(_) => fetch_json_value(fallback, label).await,
-        },
-        Err(_) => fetch_json_value(fallback, label).await,
-    }
-}
+// async fn fetch_json_value_with_fallback(primary: &str, fallback: &str, label: &str) -> Result<serde_json::Value, String> {
+//     match reqwest::get(primary).await {
+//         Ok(response) => match response.error_for_status() {
+//             Ok(success) => success
+//                 .json::<serde_json::Value>()
+//                 .await
+//                 .map_err(|e| format!("{label} 解析失败: {e}")),
+//             Err(_) => fetch_json_value(fallback, label).await,
+//         },
+//         Err(_) => fetch_json_value(fallback, label).await,
+//     }
+// }
 
-async fn fetch_json_value(url: &str, label: &str) -> Result<serde_json::Value, String> {
-    reqwest::get(url)
-        .await
-        .map_err(|e| format!("{label} 请求失败: {e}"))?
-        .error_for_status()
-        .map_err(|e| format!("{label} 状态异常: {e}"))?
-        .json::<serde_json::Value>()
-        .await
-        .map_err(|e| format!("{label} 解析失败: {e}"))
-}
+// async fn fetch_json_value(url: &str, label: &str) -> Result<serde_json::Value, String> {
+//     reqwest::get(url)
+//         .await
+//         .map_err(|e| format!("{label} 请求失败: {e}"))?
+//         .error_for_status()
+//         .map_err(|e| format!("{label} 状态异常: {e}"))?
+//         .json::<serde_json::Value>()
+//         .await
+//         .map_err(|e| format!("{label} 解析失败: {e}"))
+// }
 
-async fn fetch_vanilla_version_value(mc_version: &str, prefer_bmclapi: bool) -> Result<serde_json::Value, String> {
-    let manifest_url = if prefer_bmclapi { BMCLAPI_MANIFEST_URL } else { MOJANG_MANIFEST_URL };
-    let fallback_url = if prefer_bmclapi { MOJANG_MANIFEST_URL } else { BMCLAPI_MANIFEST_URL };
-    let manifest: VersionManifest = serde_json::from_value(
-        fetch_json_value_with_fallback(manifest_url, fallback_url, "下载版本清单").await?,
-    )
+async fn fetch_vanilla_version_value(mc_version: &str) -> Result<serde_json::Value, String> {
+
+    let manifest: VersionManifest = serde_json::from_value(bmclapi::bmclapi::fetch_json_value(MOJANG_MANIFEST_URL).await
+    .map_err(|e| e.to_string())?)
     .map_err(|e| format!("解析版本清单失败: {e}"))?;
     let entry = manifest
         .versions
@@ -307,48 +335,16 @@ async fn fetch_vanilla_version_value(mc_version: &str, prefer_bmclapi: bool) -> 
         .find(|entry| entry.id == mc_version)
         .ok_or_else(|| format!("未找到 MC 版本 {mc_version}"))?;
 
-    let primary = rewrite_meta_url(&entry.url, prefer_bmclapi);
-    let fallback = rewrite_meta_url(&entry.url, !prefer_bmclapi);
-    fetch_json_value_with_fallback(&primary, &fallback, "下载原版 version.json").await
+    bmclapi::bmclapi::fetch_json_value(&entry.url).await.map_err(|e| e.to_string())
 }
 
-async fn fetch_fabric_version_value(mc_version: &str, loader_version: &str, prefer_bmclapi: bool) -> Result<serde_json::Value, String> {
+async fn fetch_fabric_version_value(mc_version: &str, loader_version: &str) -> Result<serde_json::Value, String> {
     let official = format!(
         "https://meta.fabricmc.net/v2/versions/loader/{}/{}/profile/json",
         mc_version,
         loader_version.trim()
     );
-    let mirror = official.replace("https://meta.fabricmc.net", "https://bmclapi2.bangbang93.com/fabric-meta");
-    let (primary, fallback) = if prefer_bmclapi { (mirror, official) } else { (official, mirror) };
-    fetch_json_value_with_fallback(&primary, &fallback, "下载 Fabric version.json").await
-}
-
-fn rewrite_meta_url(url: &str, prefer_bmclapi: bool) -> String {
-    if prefer_bmclapi {
-        url.replace("https://piston-meta.mojang.com", "https://bmclapi2.bangbang93.com")
-            .replace("https://launchermeta.mojang.com", "https://bmclapi2.bangbang93.com")
-            .replace("https://launcher.mojang.com", "https://bmclapi2.bangbang93.com")
-    } else {
-        url.to_string()
-    }
-}
-
-fn rewrite_download_url(url: &str, prefer_bmclapi: bool) -> String {
-    if !prefer_bmclapi {
-        return url.to_string();
-    }
-    url.replace(MOJANG_LIBRARIES_BASE, BMCLAPI_LIBRARIES_BASE)
-        .replace(FORGE_MAVEN_BASE, BMCLAPI_FORGE_MAVEN_BASE)
-}
-
-fn download_url_candidates(url: &str, prefer_bmclapi: bool) -> Vec<String> {
-    let primary = rewrite_download_url(url, prefer_bmclapi);
-    let fallback = rewrite_download_url(url, !prefer_bmclapi);
-    if primary == fallback {
-        vec![primary]
-    } else {
-        vec![primary, fallback]
-    }
+    bmclapi::bmclapi::fetch_json_value(&official).await.map_err(|e| e.to_string())
 }
 
 // fn mirror_asset_url(hash: &str, prefer_bmclapi: bool) -> String {
@@ -360,23 +356,9 @@ fn download_url_candidates(url: &str, prefer_bmclapi: bool) -> Vec<String> {
 //     }
 // }
 
-fn asset_url_candidates(hash: &str, prefer_bmclapi: bool) -> Vec<String> {
+fn asset_url_candidates(hash: &str) -> String {
     let subdir = &hash[..2];
-    let primary = if prefer_bmclapi {
-        format!("{BMCLAPI_RESOURCES_BASE}/{subdir}/{hash}")
-    } else {
-        format!("{MOJANG_RESOURCES_BASE}/{subdir}/{hash}")
-    };
-    let fallback = if prefer_bmclapi {
-        format!("{MOJANG_RESOURCES_BASE}/{subdir}/{hash}")
-    } else {
-        format!("{BMCLAPI_RESOURCES_BASE}/{subdir}/{hash}")
-    };
-    if primary == fallback {
-        vec![primary]
-    } else {
-        vec![primary, fallback]
-    }
+    format!("{MOJANG_RESOURCES_BASE}/{subdir}/{hash}")
 }
 
 fn merge_argument_values(parent: &mut serde_json::Value, child: &serde_json::Value) {
@@ -537,7 +519,7 @@ fn get_native_classifier(current_os: &str) -> String {
     }
 }
 
-fn build_library_download_from_name(name: &str, base_url: Option<&str>, prefer_bmclapi: bool) -> Option<DownloadEntry> {
+fn build_library_download_from_name(name: &str, base_url: Option<&str>) -> Option<DownloadEntry> {
     let (coords, extension) = match name.rsplit_once('@') {
         Some((coords, ext)) => (coords, ext),
         None => (name, "jar"),
@@ -576,7 +558,6 @@ fn build_library_download_from_name(name: &str, base_url: Option<&str>, prefer_b
     if base.is_empty() {
         base = MOJANG_LIBRARIES_BASE.to_string();
     }
-    let base = rewrite_download_url(&base, prefer_bmclapi);
     let normalized = if base.ends_with('/') { base } else { format!("{base}/") };
     Some(DownloadEntry {
         url: format!("{normalized}{relative_path}"),
@@ -586,7 +567,7 @@ fn build_library_download_from_name(name: &str, base_url: Option<&str>, prefer_b
     })
 }
 
-fn build_library_tasks(libraries_dir: &Path, version_json: &VersionJson, prefer_bmclapi: bool) -> Result<Vec<DownloadTask>, String> {
+fn build_library_tasks(libraries_dir: &Path, version_json: &VersionJson) -> Result<Vec<DownloadTask>, String> {
     let mut tasks = Vec::new();
     let current_os = detect_os();
 
@@ -599,12 +580,8 @@ fn build_library_tasks(libraries_dir: &Path, version_json: &VersionJson, prefer_
             .downloads
             .as_ref()
             .and_then(|downloads| downloads.artifact.clone())
-            .map(|mut artifact| {
-                artifact.url = rewrite_download_url(&artifact.url, prefer_bmclapi);
-                artifact
-            })
             .filter(|artifact| !artifact.url.trim().is_empty())
-            .or_else(|| build_library_download_from_name(&lib.name, lib.url.as_deref(), prefer_bmclapi));
+            .or_else(|| build_library_download_from_name(&lib.name, lib.url.as_deref()));
 
         if let Some(artifact) = artifact_download.as_ref() {
             if let Some(rel_path) = resolve_download_path(artifact) {
@@ -612,7 +589,7 @@ fn build_library_tasks(libraries_dir: &Path, version_json: &VersionJson, prefer_
                 if should_download_with_sha1(&dest, &artifact.sha1)? {
                     tasks.push(DownloadTask {
                         label: format!("下载库 {}", lib.name),
-                        urls: download_url_candidates(&artifact.url, prefer_bmclapi),
+                        urls: artifact.url.clone(),
                         dest,
                         sha1: artifact.sha1.clone(),
                     });
@@ -633,7 +610,7 @@ fn build_library_tasks(libraries_dir: &Path, version_json: &VersionJson, prefer_
                     if should_download_with_sha1(&dest, &native_entry.sha1)? {
                         tasks.push(DownloadTask {
                             label: format!("下载 natives {}", lib.name),
-                            urls: download_url_candidates(&native_entry.url, prefer_bmclapi),
+                            urls: native_entry.url.clone(),
                             dest,
                             sha1: native_entry.sha1.clone(),
                         });
@@ -652,12 +629,10 @@ async fn ensure_single_download(
     dest: &Path,
     stage: &str,
     expected_sha1: &str,
-    prefer_bmclapi: bool,
 ) -> Result<(), String> {
     if should_download_with_sha1(dest, expected_sha1)? {
         reporter.emit(stage, 0, 1);
-        let urls = download_url_candidates(url, prefer_bmclapi);
-        download_with_sha1_from_candidates(&urls, dest, expected_sha1).await?;
+        download_with_sha1(&url, dest, expected_sha1).await?;
         reporter.emit(stage, 1, 1);
     } else {
         reporter.emit(stage, 1, 1);
@@ -703,7 +678,7 @@ async fn execute_download_pool(
 async fn download_task_with_retry(task: DownloadTask, max_retries: u32) -> Result<(), String> {
     let mut last_err = String::new();
     for attempt in 1..=max_retries {
-        match download_with_sha1_from_candidates(&task.urls, &task.dest, &task.sha1).await {
+        match download_with_sha1(&task.urls, &task.dest, &task.sha1).await {
             Ok(()) => return Ok(()),
             Err(e) => last_err = format!("{} 尝试 {attempt}/{max_retries} 失败: {e}", task.label),
         }
@@ -727,23 +702,9 @@ async fn download_file(url: &str, dest: &Path) -> Result<(), String> {
     Ok(())
 }
 
-async fn download_with_sha1_from_candidates(
-    urls: &[String],
-    dest: &Path,
-    expected_sha1: &str,
-) -> Result<(), String> {
-    let mut last_err = String::new();
-    for url in urls {
-        match download_with_sha1(url, dest, expected_sha1).await {
-            Ok(()) => return Ok(()),
-            Err(e) => last_err = format!("源 {} 失败: {e}", url),
-        }
-    }
-    Err(last_err)
-}
-
 async fn download_with_sha1(url: &str, dest: &Path, expected_sha1: &str) -> Result<(), String> {
-    download_file(url, dest).await?;
+    let url = replace(url);
+    download_file(&url, dest).await?;
     if expected_sha1.trim().is_empty() {
         return Ok(());
     }
@@ -824,18 +785,17 @@ fn loader_installer_spec(loader: LoaderKind) -> Option<LoaderInstallerSpec> {
     }
 }
 
-fn installer_urls(loader: LoaderKind, mc_version: &str, loader_version: &str, prefer_bmclapi: bool) -> Result<(String, String), String> {
+fn installer_urls(loader: LoaderKind, mc_version: &str, loader_version: &str) -> Result<String, String> {
     match loader {
         LoaderKind::Forge => {
             let version = format!("{}-{}", mc_version, loader_version.trim());
             let official = format!("{FORGE_MAVEN_BASE}/net/minecraftforge/forge/{0}/forge-{0}-installer.jar", version);
-            let mirror = format!("{BMCLAPI_FORGE_MAVEN_BASE}/net/minecraftforge/forge/{0}/forge-{0}-installer.jar", version);
-            Ok(if prefer_bmclapi { (mirror, official) } else { (official, mirror) })
+            Ok(official)
         }
         LoaderKind::NeoForge => {
             let version = loader_version.trim();
             let official = format!("{NEOFORGE_MAVEN_BASE}/net/neoforged/neoforge/{0}/neoforge-{0}-installer.jar", version);
-            Ok((official.clone(), official))
+            Ok(official)
         }
         _ => Err("当前 loader 不支持 installer".into()),
     }
@@ -1092,10 +1052,9 @@ async fn ensure_loader_runtime_from_installer(
 
     let installer_path = installer_cache_path(layout, request.loader, &request.mc_version, loader_version);
     if !installer_path.is_file() {
-        let (primary, fallback) = installer_urls(request.loader, &request.mc_version, loader_version, request.prefer_bmclapi)?;
+        let primary = installer_urls(request.loader, &request.mc_version, loader_version)?;
         reporter.emit("下载 loader installer", 0, 1);
-        let urls = if primary == fallback { vec![primary] } else { vec![primary, fallback] };
-        download_with_sha1_from_candidates(&urls, &installer_path, "").await?;
+        download_with_sha1(&primary, &installer_path, "").await?;
         reporter.emit("下载 loader installer", 1, 1);
     } else {
         reporter.emit("下载 loader installer", 1, 1);

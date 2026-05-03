@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use mc_launcher_core::runtime::{
-    prepare::prepare_runtime, LoaderKind, ProgressReporter, RuntimeLayout, RuntimeRequest,
+    prepare::prepare_runtime, LoaderKind, ProgressReporter, RuntimeRequest,
 };
 use tauri::Emitter;
 
@@ -37,10 +37,6 @@ fn workspace_dir(id: &str) -> PathBuf {
     get_mmpc_dir().join("workspaces").join(id)
 }
 
-fn versions_dir(id: &str) -> PathBuf {
-    workspace_dir(id).join("versions")
-}
-
 fn pack_config_path(id: &str) -> PathBuf {
     workspace_dir(id).join("pack.json")
 }
@@ -56,18 +52,6 @@ fn resolve_workspace_java_path(pack: &PackConfig) -> Result<String, String> {
     resolve_launch_java_path(pack.java_runtime_id.as_deref())
 }
 
-fn build_runtime_layout(workspace_id: &str) -> RuntimeLayout {
-    let root = get_mmpc_dir();
-    let workspace_dir = workspace_dir(workspace_id);
-    RuntimeLayout {
-        workspace_dir: workspace_dir.clone(),
-        versions_dir: versions_dir(workspace_id),
-        libraries_dir: workspace_dir.join("versions").join("libraries"),
-        assets_root: root.join("assets"),
-        installers_cache_dir: root.join("cache").join("installers"),
-        temp_root: root.join("tmp"),
-    }
-}
 
 
 pub async fn ensure_workspace_runtime(
@@ -77,18 +61,16 @@ pub async fn ensure_workspace_runtime(
 ) -> Result<String, String> {
     let settings = load_settings().unwrap_or_default();
     let pack = read_pack_config(workspace_id)?;
-    let layout = build_runtime_layout(workspace_id);
     let reporter = TauriProgressReporter { app: app.clone() };
 
     let result = prepare_runtime(
-        &layout,
+        workspace_id,
         &RuntimeRequest {
             mc_version: mc_version.to_string(),
             loader: LoaderKind::from_str(&pack.loader_type),
             loader_version: pack.loader_version.clone(),
             java_path: resolve_workspace_java_path(&pack)?,
             download_concurrency: settings.download_pool_size.max(1),
-            prefer_bmclapi: true,
         },
         &reporter,
     )

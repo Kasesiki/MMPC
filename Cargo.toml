@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
 members = [
-    "mc_launcher_core",
+    "mc_launcher_core", "bmclapi",
     "src-tauri",
 ]
