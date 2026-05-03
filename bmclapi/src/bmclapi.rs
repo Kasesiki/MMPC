@@ -8,7 +8,7 @@ use trie_rs::{Trie, TrieBuilder};
 
 static BMCLAPI_TRIE: LazyLock<Trie<u8>> = LazyLock::new(|| {
     let mut result = TrieBuilder::new();
-
+    result.push("https://maven.minecraftforge.net");
     result.push("https://piston-meta.mojang.com/mc/game/version_manifest.json");
     result.push("https://piston-meta.mojang.com/v1");
     // Vanilla manifest / version json / asset index
@@ -131,6 +131,8 @@ static BMCLAPI_REPLACE: LazyLock<HashMap<&'static str, &'static str>> = LazyLock
         "https://files.minecraftforge.net/maven",
         "https://bmclapi2.bangbang93.com/maven",
     );
+
+    result.insert("https://maven.minecraftforge.net", "https://bmclapi2.bangbang93.com/maven");
 
     // LiteLoader
     result.insert(

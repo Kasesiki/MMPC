@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use bmclapi::bmclapi::replace;
+use bmclapi::bmclapi;
 use futures_util::{stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
@@ -12,7 +12,7 @@ use super::{LoaderKind, ProgressReporter, RuntimeLayout, RuntimeRequest, Runtime
 const MOJANG_MANIFEST_URL: &str = "https://launchermeta.mojang.com/mc/game/version_manifest_v2.json";
 const MOJANG_RESOURCES_BASE: &str = "https://resources.download.minecraft.net";
 const MOJANG_LIBRARIES_BASE: &str = "https://libraries.minecraft.net";
-const FORGE_MAVEN_BASE: &str = "https://maven.minecraftforge.net";
+const FORGE_MAVEN_BASE: &str = "https://files.minecraftforge.net/maven";
 const NEOFORGE_MAVEN_BASE: &str = "https://maven.neoforged.net/releases";
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -325,17 +325,16 @@ fn write_json_pretty(path: &Path, value: &serde_json::Value) -> Result<(), Strin
 // }
 
 async fn fetch_vanilla_version_value(mc_version: &str) -> Result<serde_json::Value, String> {
-
-    let manifest: VersionManifest = serde_json::from_value(bmclapi::bmclapi::fetch_json_value(MOJANG_MANIFEST_URL).await
-    .map_err(|e| e.to_string())?)
-    .map_err(|e| format!("解析版本清单失败: {e}"))?;
+    let manifest: VersionManifest =
+        serde_json::from_value(bmclapi::fetch_json_value(MOJANG_MANIFEST_URL).await.map_err(|e| e.to_string())?)
+            .map_err(|e| format!("解析版本清单失败: {e}"))?;
     let entry = manifest
         .versions
         .into_iter()
         .find(|entry| entry.id == mc_version)
         .ok_or_else(|| format!("未找到 MC 版本 {mc_version}"))?;
 
-    bmclapi::bmclapi::fetch_json_value(&entry.url).await.map_err(|e| e.to_string())
+    bmclapi::fetch_json_value(&entry.url).await.map_err(|e| e.to_string())
 }
 
 async fn fetch_fabric_version_value(mc_version: &str, loader_version: &str) -> Result<serde_json::Value, String> {
@@ -344,7 +343,7 @@ async fn fetch_fabric_version_value(mc_version: &str, loader_version: &str) -> R
         mc_version,
         loader_version.trim()
     );
-    bmclapi::bmclapi::fetch_json_value(&official).await.map_err(|e| e.to_string())
+    bmclapi::fetch_json_value(&official).await.map_err(|e| e.to_string())
 }
 
 // fn mirror_asset_url(hash: &str, prefer_bmclapi: bool) -> String {
@@ -554,11 +553,11 @@ fn build_library_download_from_name(name: &str, base_url: Option<&str>) -> Optio
         ),
     };
 
-    let mut base = base_url.unwrap_or(MOJANG_LIBRARIES_BASE).trim().to_string();
+    let mut base = base_url.unwrap_or(MOJANG_LIBRARIES_BASE);
     if base.is_empty() {
-        base = MOJANG_LIBRARIES_BASE.to_string();
+        base = MOJANG_LIBRARIES_BASE;
     }
-    let normalized = if base.ends_with('/') { base } else { format!("{base}/") };
+    let normalized = if base.ends_with('/') { base } else { &format!("{base}/") };
     Some(DownloadEntry {
         url: format!("{normalized}{relative_path}"),
         sha1: String::new(),
@@ -687,7 +686,7 @@ async fn download_task_with_retry(task: DownloadTask, max_retries: u32) -> Resul
 }
 
 async fn download_file(url: &str, dest: &Path) -> Result<(), String> {
-    let response = reqwest::get(url)
+    let response = bmclapi::request(&url)
         .await
         .map_err(|e| format!("请求失败: {e}"))?;
     let status = response.status();
@@ -703,8 +702,7 @@ async fn download_file(url: &str, dest: &Path) -> Result<(), String> {
 }
 
 async fn download_with_sha1(url: &str, dest: &Path, expected_sha1: &str) -> Result<(), String> {
-    let url = replace(url);
-    download_file(&url, dest).await?;
+    download_file(url, dest).await?;
     if expected_sha1.trim().is_empty() {
         return Ok(());
     }
@@ -746,30 +744,6 @@ fn should_download_with_sha1(path: &Path, expected_sha1: &str) -> Result<bool, S
     }
     Ok(!file_matches_sha1(path, expected_sha1)?)
 }
-
-// fn extract_installer_version_json(bytes: &[u8], label: &str) -> Result<serde_json::Value, String> {
-//     let cursor = Cursor::new(bytes.to_vec());
-//     let mut zip = ZipArchive::new(cursor).map_err(|e| format!("解析 {label} installer 失败: {e}"))?;
-
-//     if let Ok(mut file) = zip.by_name("version.json") {
-//         let mut content = String::new();
-//         file.read_to_string(&mut content)
-//             .map_err(|e| format!("读取 {label} version.json 失败: {e}"))?;
-//         return serde_json::from_str(&content).map_err(|e| format!("解析 {label} version.json 失败: {e}"));
-//     }
-
-//     if let Ok(mut file) = zip.by_name("install_profile.json") {
-//         let mut content = String::new();
-//         file.read_to_string(&mut content)
-//             .map_err(|e| format!("读取 {label} install_profile.json 失败: {e}"))?;
-//         let profile: ForgeInstallProfile = serde_json::from_str(&content)
-//             .map_err(|e| format!("解析 {label} install_profile.json 失败: {e}"))?;
-//         if let Some(version_info) = profile.version_info {
-//             return Ok(version_info);
-//         }
-//     }
-//     Err(format!("{label} installer 中未找到可用的 version.json"))
-// }
 
 fn loader_installer_spec(loader: LoaderKind) -> Option<LoaderInstallerSpec> {
     match loader {

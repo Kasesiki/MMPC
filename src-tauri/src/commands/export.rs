@@ -11,12 +11,9 @@ use super::launch::prepare_launch;
 use super::workspace::{PackConfig, WorkspaceMod};
 
 const MOJANG_MANIFEST_URL: &str = "https://launchermeta.mojang.com/mc/game/version_manifest_v2.json";
-const BMCLAPI_MANIFEST_URL: &str = "https://bmclapi2.bangbang93.com/mc/game/version_manifest_v2.json";
-const FORGE_MAVEN_BASE: &str = "https://maven.minecraftforge.net";
-const BMCLAPI_FORGE_MAVEN_BASE: &str = "https://bmclapi2.bangbang93.com/maven";
+const FORGE_MAVEN_BASE: &str = "https://files.minecraftforge.net/maven";
 const NEOFORGE_MAVEN_BASE: &str = "https://maven.neoforged.net/releases";
 const FABRIC_META_BASE: &str = "https://meta.fabricmc.net";
-const BMCLAPI_FABRIC_META_BASE: &str = "https://bmclapi2.bangbang93.com/fabric-meta";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -249,66 +246,21 @@ fn workspace_java_path(pack: &PackConfig) -> Result<String, String> {
     resolve_launch_java_path(pack.java_runtime_id.as_deref())
 }
 
-async fn fetch_json_with_fallback(
-    primary: &str,
-    fallback: &str,
-    label: &str,
-) -> Result<serde_json::Value, String> {
-    match reqwest::get(primary).await {
-        Ok(response) => match response.error_for_status() {
-            Ok(success) => success
-                .json::<serde_json::Value>()
-                .await
-                .map_err(|e| format!("{label} 解析失败: {e}")),
-            Err(_) => reqwest::get(fallback)
-                .await
-                .map_err(|e| format!("{label} 请求失败: {e}"))?
-                .error_for_status()
-                .map_err(|e| format!("{label} 状态异常: {e}"))?
-                .json::<serde_json::Value>()
-                .await
-                .map_err(|e| format!("{label} 解析失败: {e}")),
-        },
-        Err(_) => reqwest::get(fallback)
-            .await
-            .map_err(|e| format!("{label} 请求失败: {e}"))?
-            .error_for_status()
-            .map_err(|e| format!("{label} 状态异常: {e}"))?
-            .json::<serde_json::Value>()
-            .await
-            .map_err(|e| format!("{label} 解析失败: {e}")),
-    }
-}
-
-async fn download_file_with_fallback(
-    primary: &str,
-    fallback: Option<&str>,
-    dest: &Path,
-    label: &str,
-) -> Result<(), String> {
-    let urls = if let Some(fallback) = fallback {
-        if fallback != primary {
-            vec![primary.to_string(), fallback.to_string()]
-        } else {
-            vec![primary.to_string()]
-        }
-    } else {
-        vec![primary.to_string()]
-    };
-
-    let mut last_error = String::new();
-    for url in urls {
-        match download_file(&url, dest).await {
-            Ok(()) => return Ok(()),
-            Err(err) => last_error = format!("{label} 失败，源 {url}: {err}"),
-        }
-    }
-
-    Err(last_error)
+async fn fetch_json(url: &str, label: &str) -> Result<serde_json::Value, String> {
+    let response = bmclapi::request(&url)
+        .await
+        .map_err(|e| format!("{label} 请求失败: {e}"))?;
+    let response = response
+        .error_for_status()
+        .map_err(|e| format!("{label} 状态异常: {e}"))?;
+    response
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("{label} 解析失败: {e}"))
 }
 
 async fn download_file(url: &str, dest: &Path) -> Result<(), String> {
-    let response = reqwest::get(url)
+    let response = bmclapi::request(&url)
         .await
         .map_err(|e| format!("请求失败: {e}"))?;
     let response = response
@@ -327,13 +279,8 @@ async fn download_file(url: &str, dest: &Path) -> Result<(), String> {
 
 async fn fetch_vanilla_server_download(
     mc_version: &str,
-) -> Result<(String, Option<String>), String> {
-    let manifest_value = fetch_json_with_fallback(
-        BMCLAPI_MANIFEST_URL,
-        MOJANG_MANIFEST_URL,
-        "获取版本清单",
-    )
-    .await?;
+) -> Result<String, String> {
+    let manifest_value = fetch_json(MOJANG_MANIFEST_URL, "获取版本清单").await?;
     let manifest: VersionManifest = serde_json::from_value(manifest_value)
         .map_err(|e| format!("解析版本清单失败: {e}"))?;
     let entry = manifest
@@ -349,27 +296,15 @@ async fn fetch_vanilla_server_download(
         .downloads
         .server
         .ok_or_else(|| format!("MC {mc_version} 没有可用的服务端下载"))?;
-    let fallback = if server.url.contains("bmclapi2.bangbang93.com") {
-        Some(
-            server
-                .url
-                .replace("https://bmclapi2.bangbang93.com", "https://piston-data.mojang.com"),
-        )
-    } else {
-        Some(
-            server
-                .url
-                .replace("https://piston-data.mojang.com", "https://bmclapi2.bangbang93.com")
-                .replace("https://launcher.mojang.com", "https://bmclapi2.bangbang93.com"),
-        )
-    };
-    Ok((server.url, fallback))
+    Ok(server.url)
 }
 
 async fn fetch_latest_fabric_installer_version() -> Result<String, String> {
-    let primary = format!("{BMCLAPI_FABRIC_META_BASE}/v2/versions/installer");
-    let fallback = format!("{FABRIC_META_BASE}/v2/versions/installer");
-    let value = fetch_json_with_fallback(&primary, &fallback, "获取 Fabric installer 版本").await?;
+    let value = fetch_json(
+        &format!("{FABRIC_META_BASE}/v2/versions/installer"),
+        "获取 Fabric installer 版本",
+    )
+    .await?;
     let versions: Vec<FabricInstallerVersion> = serde_json::from_value(value)
         .map_err(|e| format!("解析 Fabric installer 版本失败: {e}"))?;
     let mut stable = None;
@@ -408,28 +343,21 @@ fn forge_installer_urls(
     loader: LoaderKind,
     mc_version: &str,
     loader_version: &str,
-) -> Result<(String, Option<String>), String> {
+) -> Result<String, String> {
     match loader {
         LoaderKind::Forge => {
             let version = format!("{}-{}", mc_version, loader_version.trim());
-            Ok((
-                format!(
-                    "{BMCLAPI_FORGE_MAVEN_BASE}/net/minecraftforge/forge/{0}/forge-{0}-installer.jar",
-                    version
-                ),
-                Some(format!(
-                    "{FORGE_MAVEN_BASE}/net/minecraftforge/forge/{0}/forge-{0}-installer.jar",
-                    version
-                )),
+            Ok(format!(
+                "{FORGE_MAVEN_BASE}/net/minecraftforge/forge/{0}/forge-{0}-installer.jar",
+                version
             ))
         }
         LoaderKind::NeoForge => {
             let version = loader_version.trim();
-            let url = format!(
+            Ok(format!(
                 "{NEOFORGE_MAVEN_BASE}/net/neoforged/neoforge/{0}/neoforge-{0}-installer.jar",
                 version
-            );
-            Ok((url.clone(), Some(url)))
+            ))
         }
         _ => Err("当前 loader 不支持 installer".to_string()),
     }
@@ -632,15 +560,9 @@ async fn export_vanilla_server(
     include_java: bool,
 ) -> Result<(), String> {
     emit_export_progress(app, "获取原版服务端", 0, 3, None);
-    let (server_url, fallback_url) = fetch_vanilla_server_download(&pack.mc_version).await?;
+    let server_url = fetch_vanilla_server_download(&pack.mc_version).await?;
     let server_jar = export_dir.join(format!("server-{}.jar", pack.mc_version));
-    download_file_with_fallback(
-        &server_url,
-        fallback_url.as_deref(),
-        &server_jar,
-        "下载原版服务端",
-    )
-    .await?;
+    download_file(&server_url, &server_jar).await?;
 
     emit_export_progress(app, "写入启动脚本", 1, 3, None);
     let java_program = copy_export_java(pack, export_dir, include_java)?;
@@ -698,28 +620,16 @@ async fn export_fabric_server(
         "fabric-server-mc.{}-loader.{}-launcher.{}.jar",
         pack.mc_version, loader_version, installer_version
     ));
-    let primary = format!(
-        "{BMCLAPI_FABRIC_META_BASE}/v2/versions/loader/{}/{}/{}/server/jar",
-        pack.mc_version, loader_version, installer_version
-    );
-    let fallback = format!(
+    let server_jar_url = format!(
         "{FABRIC_META_BASE}/v2/versions/loader/{}/{}/{}/server/jar",
         pack.mc_version, loader_version, installer_version
     );
     emit_export_progress(app, "下载 Fabric 服务端启动器", 1, 4, None);
-    download_file_with_fallback(&primary, Some(&fallback), &server_jar, "下载 Fabric 服务端启动器")
-        .await?;
+    download_file(&server_jar_url, &server_jar).await?;
 
-    let (vanilla_server_url, vanilla_server_fallback) =
-        fetch_vanilla_server_download(&pack.mc_version).await?;
+    let vanilla_server_url = fetch_vanilla_server_download(&pack.mc_version).await?;
     emit_export_progress(app, "下载原版 server.jar", 2, 4, None);
-    download_file_with_fallback(
-        &vanilla_server_url,
-        vanilla_server_fallback.as_deref(),
-        &export_dir.join("server.jar"),
-        "下载 Fabric 所需原版 server.jar",
-    )
-    .await?;
+    download_file(&vanilla_server_url, &export_dir.join("server.jar")).await?;
 
     emit_export_progress(app, "写入启动脚本", 3, 4, None);
     let java_program = copy_export_java(pack, export_dir, include_java)?;
@@ -779,15 +689,9 @@ async fn export_installer_server(
 
     let installer_path = installer_path_for_export(loader, &pack.mc_version, loader_version);
     if !installer_path.exists() {
-        let (primary, fallback) = forge_installer_urls(loader, &pack.mc_version, loader_version)?;
+        let installer_url = forge_installer_urls(loader, &pack.mc_version, loader_version)?;
         emit_export_progress(app, format!("下载 {label} installer"), 1, 5, None);
-        download_file_with_fallback(
-            &primary,
-            fallback.as_deref(),
-            &installer_path,
-            &format!("下载 {label} installer"),
-        )
-        .await?;
+        download_file(&installer_url, &installer_path).await?;
     } else {
         emit_export_progress(app, format!("下载 {label} installer"), 1, 5, Some("使用缓存".to_string()));
     }

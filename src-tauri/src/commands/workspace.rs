@@ -3,6 +3,7 @@
 use std::fs;
 use std::path::PathBuf;
 
+use bmclapi::bmclapi;
 use chrono::Utc;
 use mc_launcher_core::runtime::prepare::versions_dir;
 use serde::{Deserialize, Serialize};
@@ -119,6 +120,29 @@ pub struct LoaderVersionOption {
 
 static VERSION_MANIFEST_CACHE: OnceCell<VersionManifest> = OnceCell::const_new();
 
+async fn fetch_json(url: &str, label: &str) -> Result<serde_json::Value, String> {
+    let response = bmclapi::request(&url)
+        .await
+        .map_err(|e| format!("{label} 获取失败: {e}"))?;
+    let response = response
+        .error_for_status()
+        .map_err(|e| format!("{label} 状态异常: {e}"))?;
+    response
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("{label} 解析失败: {e}"))
+}
+
+async fn fetch_text(url: &str, label: &str) -> Result<String, String> {
+    let response = bmclapi::request(&url)
+        .await
+        .map_err(|e| format!("{label} 获取失败: {e}"))?;
+    let response = response
+        .error_for_status()
+        .map_err(|e| format!("{label} 状态异常: {e}"))?;
+    response.text().await.map_err(|e| format!("{label} 读取失败: {e}"))
+}
+
 // ─── Path helpers ───
 
 fn mmpc_root() -> PathBuf {
@@ -180,12 +204,12 @@ fn clear_workspace_runtime_cache(id: &str) -> Result<(), String> {
 pub async fn get_cached_version_manifest() -> Result<VersionManifest, String> {
     VERSION_MANIFEST_CACHE
         .get_or_try_init(|| async {
-            reqwest::get("https://launchermeta.mojang.com/mc/game/version_manifest_v2.json")
-                .await
-                .map_err(|e| format!("获取版本列表失败: {e}"))?
-                .json()
-                .await
-                .map_err(|e| format!("解析版本列表失败: {e}"))
+            serde_json::from_value(fetch_json(
+                "https://launchermeta.mojang.com/mc/game/version_manifest_v2.json",
+                "获取版本列表",
+            )
+            .await?)
+            .map_err(|e| format!("解析版本列表失败: {e}"))
         })
         .await
         .cloned()
@@ -326,14 +350,11 @@ pub async fn list_release_versions() -> Result<Vec<String>, String> {
 pub async fn list_fabric_loader_versions(
     mc_version: String,
 ) -> Result<Vec<LoaderVersionOption>, String> {
-    let versions: serde_json::Value = reqwest::get(format!(
-        "https://meta.fabricmc.net/v2/versions/loader/{mc_version}"
-    ))
-    .await
-    .map_err(|e| format!("获取 Fabric 版本列表失败: {e}"))?
-    .json()
-    .await
-    .map_err(|e| format!("解析 Fabric 版本列表失败: {e}"))?;
+    let versions = fetch_json(
+        &format!("https://meta.fabricmc.net/v2/versions/loader/{mc_version}"),
+        "获取 Fabric 版本列表",
+    )
+    .await?;
 
     Ok(versions
         .as_array()
@@ -380,12 +401,7 @@ fn mc_version_to_neoforge_prefix(mc_version: &str) -> Option<String> {
 }
 
 async fn fetch_maven_metadata_versions(url: &str, label: &str) -> Result<Vec<String>, String> {
-    let xml = reqwest::get(url)
-        .await
-        .map_err(|e| format!("{label} 获取失败: {e}"))?
-        .text()
-        .await
-        .map_err(|e| format!("{label} 读取失败: {e}"))?;
+    let xml = fetch_text(url, label).await?;
     Ok(parse_maven_versions(&xml))
 }
 
@@ -394,7 +410,7 @@ pub async fn list_forge_loader_versions(
     mc_version: String,
 ) -> Result<Vec<LoaderVersionOption>, String> {
     let versions = fetch_maven_metadata_versions(
-        "https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml",
+        "https://files.minecraftforge.net/maven/net/minecraftforge/forge/maven-metadata.xml",
         "Forge 版本列表",
     )
     .await?;
