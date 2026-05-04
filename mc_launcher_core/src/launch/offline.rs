@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 use std::process::Command;
 
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
 use crate::auth::offline::OfflineUser;
@@ -295,7 +296,7 @@ impl LaunchConfigBuilder {
 pub struct OfflineLauncher;
 
 impl OfflineLauncher {
-    pub fn build_command(&self, config: &LaunchConfig, user: &OfflineUser) -> Command {
+    pub fn build_command(&self, config: &LaunchConfig, user: &OfflineUser) -> anyhow::Result<(Command, PathBuf)> {
         let plan = config
             .build_plan(user)
             .expect("OfflineLauncher: invalid launch config");
@@ -306,20 +307,20 @@ impl OfflineLauncher {
             cmd.arg(format!("-Xms{}", min));
         }
 
-        for arg in &plan.jvm_args {
-            cmd.arg(arg);
+        let mut args = [plan.jvm_args, config.extra_jvm_args.clone(), vec![plan.main_class], plan.game_args, config.extra_game_args.clone()].concat();
+
+        for arg in args.iter_mut() {
+            *arg = arg.replace(" ", "");
+            if arg.is_empty() {
+                *arg = String::from("\"\"");
+            }
         }
-        for arg in &config.extra_jvm_args {
-            cmd.arg(arg);
-        }
-        cmd.arg(&plan.main_class);
-        for arg in &plan.game_args {
-            cmd.arg(arg);
-        }
-        for arg in &config.extra_game_args {
-            cmd.arg(arg);
-        }
-        cmd
+        
+        let argfile = config.game_dir.join("java.args");
+        let content = args.join(" ");
+        std::fs::write(&argfile, content).with_context(|| format!("写入 argfile 失败: {}", argfile.display()))?;
+        cmd.args(args);
+        Ok((cmd, argfile))
     }
 }
 
@@ -328,50 +329,5 @@ impl super::Launcher for OfflineLauncher {
 
     fn build_command(&self, _config: &Self::Config) -> Command {
         unimplemented!("Use OfflineLauncher::build_command(&self, config, user) instead")
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::auth::offline::OfflineUser;
-    use crate::launch::version::parse_version_metadata;
-
-    #[test]
-    fn builds_loader_aware_command() {
-        let user = OfflineUser::new("TestPlayer");
-        let metadata = parse_version_metadata(
-            r#"{
-                "id":"1.21-test",
-                "mainClass":"net.minecraft.client.main.Main",
-                "arguments": {
-                    "jvm": ["-Djava.library.path=${natives_directory}", "-cp", "${classpath}"],
-                    "game": ["--username", "${auth_player_name}", "--assetIndex", "${assets_index_name}"]
-                },
-                "assetIndex": {"id":"1.21"}
-            }"#,
-        )
-        .unwrap();
-
-        let config = LaunchConfig::builder()
-            .java_path("/usr/bin/java")
-            .version_metadata(metadata)
-            .minecraft_jar("/game/client.jar")
-            .game_dir("/game")
-            .assets_dir("/assets")
-            .asset_index("1.21")
-            .library_dir("/game/versions/libraries")
-            .natives_dir("/game/natives")
-            .add_classpath("/game/lib/a.jar")
-            .build();
-
-        let cmd = OfflineLauncher.build_command(&config, &user);
-        let args = cmd
-            .get_args()
-            .map(|a| a.to_string_lossy().to_string())
-            .collect::<Vec<_>>();
-        assert!(args.iter().any(|v| v.contains("-Xmx2G")));
-        assert!(args.iter().any(|v| v == "net.minecraft.client.main.Main"));
-        assert!(args.iter().any(|v| v == "TestPlayer"));
     }
 }

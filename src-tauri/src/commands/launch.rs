@@ -19,33 +19,6 @@ pub struct PreparedLaunch {
     pub argfile_path: PathBuf,
 }
 
-fn format_arg_for_argfile(arg: &str) -> String {
-    if arg.is_empty() {
-        return "\"\"".to_string();
-    }
-    let needs_quote = arg.chars().any(|c| c.is_whitespace() || c == '"');
-    if !needs_quote {
-        return arg.to_string();
-    }
-    let escaped = arg.replace('\\', "\\\\").replace('"', "\\\"");
-    format!("\"{escaped}\"")
-}
-
-fn write_java_argfile(ws: &Path, args: &[String]) -> Result<PathBuf> {
-    let launch_dir = ws.join("launch");
-    std::fs::create_dir_all(&launch_dir)
-        .with_context(|| format!("创建 launch 目录失败: {}", launch_dir.display()))?;
-    let argfile = launch_dir.join("java.args");
-    let content = args
-        .iter()
-        .map(|a| format_arg_for_argfile(a))
-        .collect::<Vec<_>>()
-        .join(" ");
-    std::fs::write(&argfile, content)
-        .with_context(|| format!("写入 argfile 失败: {}", argfile.display()))?;
-    Ok(argfile)
-}
-
 /// Collect all .jar library paths under versions/libraries/ recursively
 fn collect_libraries(ws: &Path) -> Vec<PathBuf> {
     let libs_dir = ws.join("versions").join("libraries");
@@ -153,10 +126,11 @@ pub async fn prepare_launch(
 
     // 下载部分全于该部分进行
     let runtime_result: mc_launcher_core::runtime::RuntimeResult =
-        ensure_workspace_runtime(reporter, workspace_id, &pack.mc_version)
+        ensure_workspace_runtime(&reporter, workspace_id, &pack)
             .await
             .map_err(|e| e.to_string())?;
-
+    
+    reporter.send("环境准备完毕——");        
     // Collect all library JARs into classpath
     let libraries = collect_libraries(&ws);
     if libraries.is_empty() {
@@ -188,19 +162,16 @@ pub async fn prepare_launch(
 
     let version_meta_raw = std::fs::read_to_string(&runtime_result.version_json_path)
         .map_err(|e| format!("读取 version.json 失败: {e}"))?;
-    let version_meta = serde_json::from_str::<serde_json::Value>(&version_meta_raw)
-        .map_err(|e| format!("解析 version.json 失败: {e}"))?;
     let child_version_metadata = parse_version_metadata(&version_meta_raw)
         .map_err(|e| format!("解析启动元数据失败: {e}"))?;
+    
+    let asset_index_id = child_version_metadata.asset_index.as_ref()
+    .map(|index| index.id.clone())
+    .unwrap_or(pack.mc_version);
 
-    let asset_index_id = version_meta["assetIndex"]["id"]
-        .as_str()
-        .unwrap_or(&pack.mc_version);
-
-    // assetsDir should point to the root that contains objects/
     let assets_dir = mm().join("assets");
 
-    let library_dir = ws.join("versions").join("libraries");
+    let library_dir = runtime_result.version_json_path.join("libraries");
     let natives_dir = ws.join("natives");
     let logging_config = child_version_metadata
         .logging
@@ -232,18 +203,12 @@ pub async fn prepare_launch(
     let lc = b.build();
 
     let u = OfflineUser::new(player_name);
-    let built = OfflineLauncher.build_command(&lc, &u);
-    let program = built.get_program().to_string_lossy().to_string();
-    let args = built
-        .get_args()
-        .map(|a| a.to_string_lossy().to_string())
-        .collect::<Vec<_>>();
-    let argfile = write_java_argfile(&ws, &args).map_err(|e| e.to_string())?;
+    let built = OfflineLauncher.build_command(&lc, &u).map_err(|e| e.to_string())?;
 
     Ok(PreparedLaunch {
         workspace_dir: ws,
-        program,
-        argfile_path: argfile,
+        program: built.0.get_program().to_string_lossy().to_string(),
+        argfile_path: built.1,
     })
 }
 
@@ -280,13 +245,12 @@ pub async fn launch_game(
         .spawn()
         .map_err(|e| format!("启动游戏进程失败 (java: {}): {e}", prepared.program))?;
     let pid = ch.id();
-    let a2 = app.clone();
     std::thread::spawn(move || {
         use std::io::Read;
         let stdout = ch.stdout.take();
         let stderr = ch.stderr.take();
 
-        let stdout_app = a2.clone();
+        let stdout_app = app.clone();
         let stdout_thread = stdout.map(|mut so| {
             std::thread::spawn(move || {
                 let mut bf = [0u8; 4096];
@@ -306,7 +270,7 @@ pub async fn launch_game(
         });
 
         let stderr_thread = stderr.map(|mut se| {
-            let stderr_app = a2.clone();
+            let stderr_app = app.clone();
             std::thread::spawn(move || {
                 let mut bf = [0u8; 4096];
                 while let Ok(n) = se.read(&mut bf) {
@@ -331,7 +295,7 @@ pub async fn launch_game(
         if let Some(handle) = stderr_thread {
             let _ = handle.join();
         }
-        a2.emit("game-status", serde_json::json!({"state":"stopped"}))
+        app.emit("game-status", serde_json::json!({"state":"stopped"}))
             .ok();
     });
     Ok(pid)

@@ -243,7 +243,7 @@ pub async fn prepare_runtime(
         .await?;
 
     let base_version_json: VersionJson =
-        serde_json::from_value(base_value.clone()).context("解析基础 version.json 失败")?;
+        serde_json::from_value(base_value.clone()   ).context("解析基础 version.json 失败")?;
 
     let client_path = layout.versions_dir.join("client.jar");
 
@@ -305,6 +305,7 @@ pub async fn prepare_runtime(
     )
     .await?;
 
+    reporter.send("下载asset_index.json...");
     // 下载asset_index.json, 存到工作区的versions文件夹
     let asset_index_path = layout.versions_dir.join("asset_index.json");
     ensure_single_download(
@@ -327,6 +328,7 @@ pub async fn prepare_runtime(
     )
     .await?;
 
+    reporter.send("构建asset index中...");
     let asset_index_content = std::fs::read_to_string(&asset_index_path)
         .with_context(|| format!("读取 asset index 失败: {}", asset_index_path.display()))?;
     let asset_index: AssetIndexObjects =
@@ -396,6 +398,11 @@ pub async fn prepare_runtime(
     })
 }
 
+fn asset_url_candidates(hash: &str) -> String {
+    let subdir = &hash[..2];
+    format!("{MOJANG_RESOURCES_BASE}/{subdir}/{hash}")
+}
+
 // 将value写入path
 fn write_json_pretty(path: &Path, value: &serde_json::Value) -> Result<()> {
     let content = serde_json::to_string_pretty(value)
@@ -437,11 +444,6 @@ async fn fetch_fabric_version_value(
         loader_version.trim()
     );
     fetch_json_with_candidates(&official, "下载 Fabric version.json").await
-}
-
-fn asset_url_candidates(hash: &str) -> String {
-    let subdir = &hash[..2];
-    format!("{MOJANG_RESOURCES_BASE}/{subdir}/{hash}")
 }
 
 fn merge_argument_values(parent: &mut serde_json::Value, child: &serde_json::Value) {

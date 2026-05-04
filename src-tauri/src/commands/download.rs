@@ -71,25 +71,23 @@ fn resolve_workspace_java_path(pack: &PackConfig) -> Result<String> {
 }
 
 pub async fn ensure_workspace_runtime(
-    reporter: TauriProgressReporter,
+    reporter: &TauriProgressReporter,
     workspace_id: &str,
-    mc_version: &str,
+    pack: &PackConfig,
 ) -> Result<RuntimeResult> {
     reporter.send("正在加载配置文件....");
     let settings = load_settings().unwrap_or_default();
-    let pack = read_pack_config(workspace_id)?;
 
-    let result = prepare_runtime(
+    prepare_runtime(
         workspace_id,
         &RuntimeRequest {
-            mc_version: mc_version.to_string(),
+            mc_version: pack.mc_version.to_string(),
             loader: LoaderKind::from_str(&pack.loader_type),
             loader_version: pack.loader_version.clone(),
             java_path: resolve_workspace_java_path(&pack)?,
             download_concurrency: settings.download_pool_size.max(1),
         },
-        &reporter,
+        reporter,
     )
-    .await?;
-    Ok(result)
+    .await
 }
