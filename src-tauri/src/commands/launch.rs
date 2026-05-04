@@ -178,29 +178,28 @@ pub async fn prepare_launch(
         .as_ref()
         .and_then(|logging| default_logging_config_path(&ws.join("versions"), logging));
 
-    let mut b = LaunchConfig::builder()
-        .java_path(&java_path)
-        .version_metadata(child_version_metadata)
-        .minecraft_jar(&runtime_result.client_jar_path)
-        .game_dir(&ws)
-        .assets_dir(&assets_dir)
-        .asset_index(asset_index_id)
-        .library_dir(&library_dir)
-        .natives_dir(&natives_dir)
-        .max_mem(format!("{}M", pack.max_memory_mb))
-        .min_mem(format!("{}M", pack.min_memory_mb))
-        .resolution(pack.window_width, pack.window_height);
-    if let Some(logging_config) = logging_config {
-        b = b.logging_config(logging_config);
-    }
-    for a in &pack.jvm_args {
-        b = b.add_jvm_arg(a);
-    }
-    // Add all library JARs to classpath
-    for lib in &libraries {
-        b = b.add_classpath(lib);
-    }
-    let lc = b.build();
+    let lc = LaunchConfig {
+        java_path: java_path.into(),
+        version_metadata: child_version_metadata,
+        version_jar: runtime_result.client_jar_path,
+        classpath: libraries,
+        main_class: None,
+        game_dir: ws.clone(),
+        assets_dir,
+        asset_index: asset_index_id,
+        library_dir,
+        natives_dir,
+        logging_config,
+        max_mem: format!("{}M", pack.max_memory_mb),
+        min_mem: Some(format!("{}M", pack.min_memory_mb)),
+        extra_jvm_args: pack.jvm_args,
+        extra_game_args: Vec::new(),
+        demo: false,
+        width: Some(pack.window_width),
+        height: Some(pack.window_height),
+        launcher_name: "mmpc".into(),
+        launcher_version: env!("CARGO_PKG_VERSION").into(),
+    };
 
     let u = OfflineUser::new(player_name);
     let built = OfflineLauncher.build_command(&lc, &u).map_err(|e| e.to_string())?;
