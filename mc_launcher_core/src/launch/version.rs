@@ -180,7 +180,10 @@ pub fn parse_version_metadata(content: &str) -> Result<VersionMetadata, LaunchEr
         .map_err(|e| LaunchError::InvalidConfig(format!("invalid version metadata: {e}")))
 }
 
-pub fn merge_version_metadata(parent: &VersionMetadata, child: &VersionMetadata) -> VersionMetadata {
+pub fn merge_version_metadata(
+    parent: &VersionMetadata,
+    child: &VersionMetadata,
+) -> VersionMetadata {
     let mut merged = parent.clone();
 
     if !child.id.is_empty() {
@@ -254,17 +257,17 @@ fn library_key(name: &str) -> String {
     format!("{}:{}:{}@{}", parts[0], parts[1], classifier, ext)
 }
 
-pub fn merge_version_chain(chain: &[VersionMetadata]) -> Result<VersionMetadata, LaunchError> {
-    let mut iter = chain.iter();
-    let Some(first) = iter.next() else {
-        return Err(LaunchError::InvalidConfig("version chain is empty".into()));
-    };
-    let mut merged = first.clone();
-    for version in iter {
-        merged = merge_version_metadata(&merged, version);
-    }
-    Ok(merged)
-}
+// pub fn merge_version_chain(chain: &[VersionMetadata]) -> Result<VersionMetadata, LaunchError> {
+//     let mut iter = chain.iter();
+//     let Some(first) = iter.next() else {
+//         return Err(LaunchError::InvalidConfig("version chain is empty".into()));
+//     };
+//     let mut merged = first.clone();
+//     for version in iter {
+//         merged = merge_version_metadata(&merged, version);
+//     }
+//     Ok(merged)
+// }
 
 pub fn resolve_launch_plan(
     version: &VersionMetadata,
@@ -309,7 +312,11 @@ pub fn resolve_launch_arguments(
         .map(|a| resolve_argument_specs(&a.jvm, &replacements, &context.feature_flags))
         .unwrap_or_default();
 
-    if let Some(logging) = metadata.logging.as_ref().and_then(|logging| logging.client.as_ref()) {
+    if let Some(logging) = metadata
+        .logging
+        .as_ref()
+        .and_then(|logging| logging.client.as_ref())
+    {
         if let Some(logging_path) = &context.logging_path {
             let logging_argument = logging.argument.replace("${path}", logging_path);
             jvm_args.push(logging_argument);
@@ -445,9 +452,10 @@ pub fn evaluate_rules(
             }
             None => true,
         };
-        let matches_features = rule.features.iter().all(|(name, expected)| {
-            feature_flags.get(name).copied().unwrap_or(false) == *expected
-        });
+        let matches_features = rule
+            .features
+            .iter()
+            .all(|(name, expected)| feature_flags.get(name).copied().unwrap_or(false) == *expected);
 
         if matches_os && matches_features {
             match rule.action.as_str() {
@@ -470,38 +478,6 @@ pub fn default_logging_config_path(base_dir: &Path, logging: &LoggingConfig) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn merges_version_chain_and_libraries() {
-        let parent = parse_version_metadata(
-            r#"{
-                "id":"1.21",
-                "mainClass":"net.minecraft.client.main.Main",
-                "arguments": {
-                    "game": ["--username", "${auth_player_name}"],
-                    "jvm": ["-cp", "${classpath}"]
-                },
-                "libraries": [{"name":"a:b:1.0"}],
-                "assetIndex": {"id":"1.21"}
-            }"#,
-        )
-        .unwrap();
-        let child = parse_version_metadata(
-            r#"{
-                "id":"fabric-loader-0.16.0-1.21",
-                "inheritsFrom":"1.21",
-                "mainClass":"net.fabricmc.loader.impl.launch.knot.KnotClient",
-                "arguments": { "game": ["--version", "${version_name}"] },
-                "libraries": [{"name":"a:b:2.0"},{"name":"c:d:1.0"}]
-            }"#,
-        )
-        .unwrap();
-
-        let merged = merge_version_chain(&[parent, child]).unwrap();
-        assert_eq!(merged.id, "fabric-loader-0.16.0-1.21");
-        assert_eq!(merged.main_class.as_deref(), Some("net.fabricmc.loader.impl.launch.knot.KnotClient"));
-        assert_eq!(merged.libraries.len(), 2);
-    }
 
     #[test]
     fn resolves_arguments_and_rules() {

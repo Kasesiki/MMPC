@@ -3,6 +3,7 @@
 use std::fs;
 use std::path::PathBuf;
 
+use anyhow::{bail, Context, Result as AnyResult};
 use bmclapi::bmclapi;
 use chrono::Utc;
 use mc_launcher_core::runtime::prepare::versions_dir;
@@ -120,27 +121,29 @@ pub struct LoaderVersionOption {
 
 static VERSION_MANIFEST_CACHE: OnceCell<VersionManifest> = OnceCell::const_new();
 
-async fn fetch_json(url: &str, label: &str) -> Result<serde_json::Value, String> {
-    let response = bmclapi::request(&url)
-        .await
-        .map_err(|e| format!("{label} 获取失败: {e}"))?;
-    let response = response
-        .error_for_status()
-        .map_err(|e| format!("{label} 状态异常: {e}"))?;
-    response
-        .json::<serde_json::Value>()
-        .await
-        .map_err(|e| format!("{label} 解析失败: {e}"))
+async fn fetch_json(url: &str, label: &str) -> AnyResult<serde_json::Value> {
+    let response = match bmclapi::request(url).await {
+        Ok(resp) => resp,
+        Err(err) => {
+            bail!("{label} 获取失败: {err}")
+        }
+    };
+    let response = match response.error_for_status() {
+        Ok(resp) => resp,
+        Err(err) => {
+            bail!("{label} 获取失败: {err}")
+        }
+    };
+    match response.json::<serde_json::Value>().await {
+        Ok(value) => return Ok(value),
+        Err(err) => bail!("{label} 解析失败: {err}"),
+    }
 }
 
-async fn fetch_text(url: &str, label: &str) -> Result<String, String> {
-    let response = bmclapi::request(&url)
-        .await
-        .map_err(|e| format!("{label} 获取失败: {e}"))?;
-    let response = response
-        .error_for_status()
-        .map_err(|e| format!("{label} 状态异常: {e}"))?;
-    response.text().await.map_err(|e| format!("{label} 读取失败: {e}"))
+async fn fetch_text(url: &str) -> AnyResult<String> {
+    let response = reqwest::get(url).await?;
+    let response = response.error_for_status()?;
+    response.text().await.map_err(|e| e.into())
 }
 
 // ─── Path helpers ───
@@ -161,8 +164,6 @@ fn workspace_dir(id: &str) -> PathBuf {
 fn pack_json_path(id: &str) -> PathBuf {
     workspace_dir(id).join("pack.json")
 }
-
-
 
 fn natives_dir(id: &str) -> PathBuf {
     workspace_dir(id).join("natives")
@@ -191,25 +192,154 @@ fn normalize_loader_version(loader_type: &str, loader_version: Option<String>) -
         .filter(|value| !value.is_empty())
 }
 
-fn clear_workspace_runtime_cache(id: &str) -> Result<(), String> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct McReleaseVersion {
+    major: u32,
+    minor: u32,
+    patch: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct JavaRequirementRule {
+    min: McReleaseVersion,
+    max: Option<McReleaseVersion>,
+    preferred_java_majors: &'static [u32],
+}
+
+const JAVA_REQ_21: &[u32] = &[21];
+const JAVA_REQ_17_16: &[u32] = &[17, 16];
+const JAVA_REQ_8_11: &[u32] = &[8, 11];
+const JAVA_REQ_8: &[u32] = &[8];
+
+const MC_JAVA_REQUIREMENT_RULES: &[JavaRequirementRule] = &[
+    JavaRequirementRule {
+        min: McReleaseVersion {
+            major: 1,
+            minor: 20,
+            patch: 5,
+        },
+        max: None,
+        preferred_java_majors: JAVA_REQ_21,
+    },
+    JavaRequirementRule {
+        min: McReleaseVersion {
+            major: 1,
+            minor: 17,
+            patch: 0,
+        },
+        max: Some(McReleaseVersion {
+            major: 1,
+            minor: 20,
+            patch: 4,
+        }),
+        preferred_java_majors: JAVA_REQ_17_16,
+    },
+    JavaRequirementRule {
+        min: McReleaseVersion {
+            major: 1,
+            minor: 12,
+            patch: 0,
+        },
+        max: Some(McReleaseVersion {
+            major: 1,
+            minor: 16,
+            patch: 5,
+        }),
+        preferred_java_majors: JAVA_REQ_8_11,
+    },
+    JavaRequirementRule {
+        min: McReleaseVersion {
+            major: 0,
+            minor: 0,
+            patch: 0,
+        },
+        max: Some(McReleaseVersion {
+            major: 1,
+            minor: 11,
+            patch: 999,
+        }),
+        preferred_java_majors: JAVA_REQ_8,
+    },
+];
+
+fn parse_mc_release_version(mc_version: &str) -> Option<McReleaseVersion> {
+    let normalized = mc_version
+        .trim()
+        .split(['-', '+'])
+        .next()
+        .unwrap_or("")
+        .trim();
+    if normalized.is_empty() {
+        return None;
+    }
+    let mut parts = normalized.split('.');
+    let major = parts.next()?.parse::<u32>().ok()?;
+    let minor = parts.next()?.parse::<u32>().ok()?;
+    let patch = parts
+        .next()
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(0);
+
+    Some(McReleaseVersion {
+        major,
+        minor,
+        patch,
+    })
+}
+
+fn preferred_java_majors_for_mc(mc_version: &str) -> Option<&'static [u32]> {
+    let parsed = parse_mc_release_version(mc_version)?;
+    MC_JAVA_REQUIREMENT_RULES
+        .iter()
+        .find(|rule| {
+            if parsed < rule.min {
+                return false;
+            }
+            match rule.max {
+                Some(max) => parsed <= max,
+                None => true,
+            }
+        })
+        .map(|rule| rule.preferred_java_majors)
+}
+
+fn select_java_runtime_id_for_mc(mc_version: &str) -> Option<String> {
+    let preferred = preferred_java_majors_for_mc(mc_version)?;
+    let runtimes = super::java::list_java_runtimes().ok()?;
+
+    for major in preferred {
+        if let Some(runtime) = runtimes
+            .iter()
+            .rev()
+            .find(|runtime| runtime.major_version == Some(*major))
+        {
+            return Some(runtime.id.clone());
+        }
+    }
+    None
+}
+
+fn clear_workspace_runtime_cache(id: &str) -> AnyResult<()> {
     for path in [versions_dir(id), natives_dir(id), launch_dir(id)] {
         if path.exists() {
             fs::remove_dir_all(&path)
-                .map_err(|e| format!("清理运行时缓存失败 ({}): {e}", path.display()))?;
+                .with_context(|| format!("清理运行时缓存失败 ({})", path.display()))?;
         }
     }
     Ok(())
 }
 
-pub async fn get_cached_version_manifest() -> Result<VersionManifest, String> {
+pub async fn get_cached_version_manifest() -> AnyResult<VersionManifest> {
     VERSION_MANIFEST_CACHE
         .get_or_try_init(|| async {
-            serde_json::from_value(fetch_json(
-                "https://launchermeta.mojang.com/mc/game/version_manifest_v2.json",
-                "获取版本列表",
+            serde_json::from_value(
+                fetch_json(
+                    "https://launchermeta.mojang.com/mc/game/version_manifest_v2.json",
+                    "获取版本列表",
+                )
+                .await?,
             )
-            .await?)
-            .map_err(|e| format!("解析版本列表失败: {e}"))
+            .context("解析版本列表失败")
         })
         .await
         .cloned()
@@ -300,6 +430,8 @@ pub fn create_workspace(
     let loader_type = normalize_loader_type(loader_type.as_deref().unwrap_or("vanilla"));
     let loader_version = normalize_loader_version(&loader_type, loader_version);
 
+    let auto_java_runtime_id = select_java_runtime_id_for_mc(&mc_version);
+
     let cfg = PackConfig {
         id: id.clone(),
         name,
@@ -309,7 +441,7 @@ pub fn create_workspace(
         description,
         mods: vec![],
         jvm_args: vec![],
-        java_runtime_id: None,
+        java_runtime_id: auto_java_runtime_id,
         min_memory_mb: 1024,
         max_memory_mb: 4096,
         window_width: 1280,
@@ -336,7 +468,9 @@ pub fn create_workspace(
 
 #[tauri::command]
 pub async fn list_release_versions() -> Result<Vec<String>, String> {
-    let manifest = get_cached_version_manifest().await?;
+    let manifest = get_cached_version_manifest()
+        .await
+        .map_err(|e| e.to_string())?;
 
     Ok(manifest
         .versions
@@ -354,7 +488,8 @@ pub async fn list_fabric_loader_versions(
         &format!("https://meta.fabricmc.net/v2/versions/loader/{mc_version}"),
         "获取 Fabric 版本列表",
     )
-    .await?;
+    .await
+    .map_err(|e| e.to_string())?;
 
     Ok(versions
         .as_array()
@@ -400,8 +535,8 @@ fn mc_version_to_neoforge_prefix(mc_version: &str) -> Option<String> {
     mc_version.strip_prefix("1.").map(|rest| rest.to_string())
 }
 
-async fn fetch_maven_metadata_versions(url: &str, label: &str) -> Result<Vec<String>, String> {
-    let xml = fetch_text(url, label).await?;
+async fn fetch_maven_metadata_versions(url: &str) -> AnyResult<Vec<String>> {
+    let xml = fetch_text(url).await?;
     Ok(parse_maven_versions(&xml))
 }
 
@@ -410,10 +545,10 @@ pub async fn list_forge_loader_versions(
     mc_version: String,
 ) -> Result<Vec<LoaderVersionOption>, String> {
     let versions = fetch_maven_metadata_versions(
-        "https://files.minecraftforge.net/maven/net/minecraftforge/forge/maven-metadata.xml",
-        "Forge 版本列表",
+        "https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml",
     )
-    .await?;
+    .await
+    .map_err(|e| e.to_string())?;
 
     Ok(versions
         .into_iter()
@@ -436,9 +571,9 @@ pub async fn list_neoforge_loader_versions(
     };
     let versions = fetch_maven_metadata_versions(
         "https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml",
-        "NeoForge 版本列表",
     )
-    .await?;
+    .await
+    .map_err(|e| e.to_string())?;
 
     Ok(versions
         .into_iter()
@@ -494,7 +629,7 @@ pub fn save_pack_config(id: String, config: PackConfig) -> Result<(), String> {
                 || previous_loader_version != cfg.loader_version;
 
             if version_related_changed {
-                clear_workspace_runtime_cache(&id)?;
+                clear_workspace_runtime_cache(&id).map_err(|e| e.to_string())?;
             }
         }
     }

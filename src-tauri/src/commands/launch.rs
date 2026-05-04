@@ -3,11 +3,10 @@ use crate::commands::download::read_pack_config;
 use super::download::ensure_workspace_runtime;
 use super::java::resolve_launch_java_path;
 use super::mods::sync_workspace_mods;
+use anyhow::{Context, Result};
 use mc_launcher_core::auth::offline::OfflineUser;
 use mc_launcher_core::launch::offline::{LaunchConfig, OfflineLauncher};
-use mc_launcher_core::launch::version::{
-    default_logging_config_path, merge_version_chain, parse_version_metadata,
-};
+use mc_launcher_core::launch::version::{default_logging_config_path, parse_version_metadata};
 use mc_launcher_core::runtime::prepare::{mm, wd};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -23,13 +22,6 @@ pub struct PreparedLaunch {
     pub has_fabric_loader: bool,
 }
 
-
-
-
-fn ps(p: &PathBuf) -> &str {
-    p.to_str().unwrap_or("")
-}
-
 fn format_arg_for_argfile(arg: &str) -> String {
     if arg.is_empty() {
         return "\"\"".to_string();
@@ -42,16 +34,18 @@ fn format_arg_for_argfile(arg: &str) -> String {
     format!("\"{escaped}\"")
 }
 
-fn write_java_argfile(ws: &PathBuf, args: &[String]) -> Result<PathBuf, String> {
+fn write_java_argfile(ws: &PathBuf, args: &[String]) -> Result<PathBuf> {
     let launch_dir = ws.join("launch");
-    std::fs::create_dir_all(&launch_dir).map_err(|e| format!("创建 launch 目录失败: {e}"))?;
+    std::fs::create_dir_all(&launch_dir)
+        .with_context(|| format!("创建 launch 目录失败: {}", launch_dir.display()))?;
     let argfile = launch_dir.join("java.args");
     let content = args
         .iter()
         .map(|a| format_arg_for_argfile(a))
         .collect::<Vec<_>>()
         .join(" ");
-    std::fs::write(&argfile, content).map_err(|e| format!("写入 argfile 失败: {e}"))?;
+    std::fs::write(&argfile, content)
+        .with_context(|| format!("写入 argfile 失败: {}", argfile.display()))?;
     Ok(argfile)
 }
 
@@ -112,9 +106,10 @@ struct AssetObject {
     hash: String,
 }
 
-fn prepare_natives_dir(ws: &PathBuf, libraries: &[PathBuf]) -> Result<(), String> {
+fn prepare_natives_dir(ws: &PathBuf, libraries: &[PathBuf]) -> Result<()> {
     let natives_dir = ws.join("natives");
-    std::fs::create_dir_all(&natives_dir).map_err(|e| format!("创建 natives 目录失败: {e}"))?;
+    std::fs::create_dir_all(&natives_dir)
+        .with_context(|| format!("创建 natives 目录失败: {}", natives_dir.display()))?;
 
     for lib in libraries {
         if !is_native_jar(lib) {
@@ -122,14 +117,14 @@ fn prepare_natives_dir(ws: &PathBuf, libraries: &[PathBuf]) -> Result<(), String
         }
 
         let file = std::fs::File::open(lib)
-            .map_err(|e| format!("打开 natives jar 失败 ({}): {e}", lib.display()))?;
+            .with_context(|| format!("打开 natives jar 失败 ({})", lib.display()))?;
         let mut zip = ZipArchive::new(file)
-            .map_err(|e| format!("读取 natives jar 失败 ({}): {e}", lib.display()))?;
+            .with_context(|| format!("读取 natives jar 失败 ({})", lib.display()))?;
 
         for i in 0..zip.len() {
             let mut entry = zip
                 .by_index(i)
-                .map_err(|e| format!("读取 natives 条目失败 ({}): {e}", lib.display()))?;
+                .with_context(|| format!("读取 natives 条目失败 ({})", lib.display()))?;
             if !entry.is_file() {
                 continue;
             }
@@ -142,25 +137,25 @@ fn prepare_natives_dir(ws: &PathBuf, libraries: &[PathBuf]) -> Result<(), String
             }
             let out_path = natives_dir.join(file_name);
             let mut out = std::fs::File::create(&out_path)
-                .map_err(|e| format!("写入 natives 文件失败 ({}): {e}", out_path.display()))?;
+                .with_context(|| format!("写入 natives 文件失败 ({})", out_path.display()))?;
             std::io::copy(&mut entry, &mut out)
-                .map_err(|e| format!("解压 natives 文件失败 ({}): {e}", out_path.display()))?;
+                .with_context(|| format!("解压 natives 文件失败 ({})", out_path.display()))?;
         }
     }
 
     Ok(())
 }
 
-fn ensure_required_assets(ws: &PathBuf) -> Result<(), String> {
+fn ensure_required_assets(ws: &PathBuf) -> Result<()> {
     let asset_index_path = ws.join("versions").join("asset_index.json");
     if !asset_index_path.exists() {
-        return Err("缺少 asset_index.json，请先点击“下载/修复 MC 依赖”".into());
+        anyhow::bail!("缺少 asset_index.json，请先点击“下载/修复 MC 依赖”");
     }
 
     let asset_index_content = std::fs::read_to_string(&asset_index_path)
-        .map_err(|e| format!("读取 asset_index.json 失败: {e}"))?;
-    let asset_index: AssetIndexObjects = serde_json::from_str(&asset_index_content)
-        .map_err(|e| format!("解析 asset_index.json 失败: {e}"))?;
+        .with_context(|| format!("读取 asset_index.json 失败: {}", asset_index_path.display()))?;
+    let asset_index: AssetIndexObjects =
+        serde_json::from_str(&asset_index_content).context("解析 asset_index.json 失败")?;
 
     let assets_objects_dir = mm().join("assets").join("objects");
     let mut missing_count = 0usize;
@@ -180,16 +175,16 @@ fn ensure_required_assets(ws: &PathBuf) -> Result<(), String> {
     }
 
     if missing_count > 0 {
-        return Err(format!(
+        anyhow::bail!(
             "资源文件不完整，缺少 {missing_count} 个 assets，示例哈希: {}。请先点击“下载/修复 MC 依赖”完成补全后再启动。",
             sample_hashes.join(", ")
-        ));
+        );
     }
 
     Ok(())
 }
 
-/// 同步工作区的mods, 
+/// 同步工作区的mods,
 #[tauri::command]
 pub async fn prepare_launch(
     app: &tauri::AppHandle,
@@ -200,13 +195,11 @@ pub async fn prepare_launch(
     let ws = wd(workspace_id);
     // 同步mod
     sync_workspace_mods(workspace_id.to_string())?;
-    let mut pack = read_pack_config(workspace_id).map_err(String::from)?;
-    
-    let _ = ensure_workspace_runtime(app, workspace_id, &pack.mc_version).await?;
-    let cj = ws.join("versions").join("client.jar");
-    if !cj.exists() {
-        return Err("no client.jar".into());
-    }
+    let mut pack = read_pack_config(workspace_id).map_err(|e| e.to_string())?;
+
+    let runtime_result = ensure_workspace_runtime(app, workspace_id, &pack.mc_version)
+        .await
+        .map_err(|e| e.to_string())?;
 
     // Collect all library JARs into classpath
     let libraries = collect_libraries(&ws);
@@ -219,8 +212,8 @@ pub async fn prepare_launch(
             .map(|name| name.starts_with("fabric-loader-") && name.ends_with(".jar"))
             .unwrap_or(false)
     });
-    ensure_required_assets(&ws)?;
-    prepare_natives_dir(&ws, &libraries)?;
+    ensure_required_assets(&ws).map_err(|e| e.to_string())?;
+    prepare_natives_dir(&ws, &libraries).map_err(|e| e.to_string())?;
 
     // Collect JVM args
     pack.jvm_args.extend(
@@ -251,45 +244,48 @@ pub async fn prepare_launch(
     } else {
         resolve_launch_java_path(pack.java_runtime_id.as_deref())?
     };
-    let version_json_path = ws.join("versions").join("version.json");
-    let version_meta_raw = std::fs::read_to_string(&version_json_path)
+
+    let version_meta_raw = std::fs::read_to_string(&runtime_result.version_json_path)
         .map_err(|e| format!("读取 version.json 失败: {e}"))?;
     let version_meta = serde_json::from_str::<serde_json::Value>(&version_meta_raw)
         .map_err(|e| format!("解析 version.json 失败: {e}"))?;
     let child_version_metadata = parse_version_metadata(&version_meta_raw)
         .map_err(|e| format!("解析启动元数据失败: {e}"))?;
-    let mut version_chain = Vec::new();
-    if let Some(parent_id) = child_version_metadata.inherits_from.clone() {
-        let parent_version_json_path = ws.join("versions").join(format!("{parent_id}.json"));
-        if parent_version_json_path.exists() {
-            let parent_raw = std::fs::read_to_string(&parent_version_json_path)
-                .map_err(|e| format!("读取父级 version.json 失败: {e}"))?;
-            let parent_metadata = parse_version_metadata(&parent_raw)
-                .map_err(|e| format!("解析父级启动元数据失败: {e}"))?;
-            version_chain.push(parent_metadata);
-        }
-    }
-    version_chain.push(child_version_metadata);
-    let parsed_version_metadata =
-        merge_version_chain(&version_chain).map_err(|e| format!("合并启动元数据失败: {e}"))?;
-    let asset_index_id = version_meta["assetIndex"]["id"].as_str().unwrap_or(&pack.mc_version);
-
+    // let mut version_chain = Vec::new();
+    // 由于parent_id.json实际上就是原版.json, 而下载时已经合并过参数所以直接跳过，暂时注释
+    // 并非，parent_id在有loader的情况会额外加载，而普通的version.json只包含VersionJson的值
+    // if let Some(parent_id) = child_version_metadata.inherits_from.clone() {
+    //     let parent_version_json_path = ws.join("versions").join(format!("{parent_id}.json"));
+    //     if parent_version_json_path.exists() {
+    //         let parent_raw = std::fs::read_to_string(&parent_version_json_path)
+    //             .map_err(|e| format!("读取父级 version.json 失败: {e}"))?;
+    //         let parent_metadata = parse_version_metadata(&parent_raw)
+    //             .map_err(|e| format!("解析父级启动元数据失败: {e}"))?;
+    //         version_chain.push(parent_metadata);
+    //     }
+    // }
+    // version_chain.push(child_version_metadata);
+    // let parsed_version_metadata =
+    //     merge_version_chain(&version_chain).map_err(|e| format!("合并启动元数据失败: {e}"))?;
+    let asset_index_id = version_meta["assetIndex"]["id"]
+        .as_str()
+        .unwrap_or(&pack.mc_version);
 
     // assetsDir should point to the root that contains objects/
     let assets_dir = mm().join("assets");
     let library_dir = ws.join("versions").join("libraries");
     let natives_dir = ws.join("natives");
-    let logging_config = parsed_version_metadata
+    let logging_config = child_version_metadata
         .logging
         .as_ref()
         .and_then(|logging| default_logging_config_path(&ws.join("versions"), logging));
 
     let mut b = LaunchConfig::builder()
         .java_path(&jv)
-        .version_metadata(parsed_version_metadata)
-        .minecraft_jar(ps(&cj))
-        .game_dir(ps(&ws))
-        .assets_dir(ps(&assets_dir))
+        .version_metadata(child_version_metadata)
+        .minecraft_jar(&runtime_result.client_jar_path)
+        .game_dir(&ws)
+        .assets_dir(&assets_dir)
         .asset_index(asset_index_id)
         .library_dir(&library_dir)
         .natives_dir(&natives_dir)
@@ -315,7 +311,7 @@ pub async fn prepare_launch(
         .get_args()
         .map(|a| a.to_string_lossy().to_string())
         .collect::<Vec<_>>();
-    let argfile = write_java_argfile(&ws, &args)?;
+    let argfile = write_java_argfile(&ws, &args).map_err(|e| e.to_string())?;
 
     Ok(PreparedLaunch {
         workspace_dir: ws,

@@ -1,9 +1,9 @@
 // This is Human Code
 // AI don't repair that
 
-use std::{collections::HashMap, sync::LazyLock};
 use anyhow::Context;
 use reqwest::{Response, StatusCode};
+use std::{collections::HashMap, sync::LazyLock};
 use trie_rs::{Trie, TrieBuilder};
 
 static BMCLAPI_TRIE: LazyLock<Trie<u8>> = LazyLock::new(|| {
@@ -12,28 +12,16 @@ static BMCLAPI_TRIE: LazyLock<Trie<u8>> = LazyLock::new(|| {
     result.push("https://piston-meta.mojang.com/mc/game/version_manifest.json");
     result.push("https://piston-meta.mojang.com/v1");
     // Vanilla manifest / version json / asset index
-    result.push(
-        "https://launchermeta.mojang.com/mc/game/version_manifest.json",
-    );
-    result.push(
-        "https://launchermeta.mojang.com/mc/game/version_manifest_v2.json",
-    );
-    result.push(
-        "https://launchermeta.mojang.com",
-    );
-    result.push(
-        "https://launcher.mojang.com",
-    );
+    result.push("https://launchermeta.mojang.com/mc/game/version_manifest.json");
+    result.push("https://launchermeta.mojang.com/mc/game/version_manifest_v2.json");
+    result.push("https://launchermeta.mojang.com");
+    result.push("https://launcher.mojang.com");
 
     // Assets
-    result.push(
-        "https://resources.download.minecraft.net",
-    );
+    result.push("https://resources.download.minecraft.net");
 
     // Libraries
-    result.push(
-        "https://libraries.minecraft.net",
-    );
+    result.push("https://libraries.minecraft.net");
 
     // Mojang Java
     result.push(
@@ -41,55 +29,41 @@ static BMCLAPI_TRIE: LazyLock<Trie<u8>> = LazyLock::new(|| {
     );
 
     // Forge
-    result.push(
-        "https://files.minecraftforge.net/maven",
-    );
+    result.push("https://files.minecraftforge.net/maven");
 
     // LiteLoader
-    result.push(
-        "https://dl.liteloader.com/versions/versions.json",
-    );
+    result.push("https://dl.liteloader.com/versions/versions.json");
 
     // authlib-injector
-    result.push(
-        "https://authlib-injector.yushi.moe",
-    );
+    result.push("https://authlib-injector.yushi.moe");
 
     // Fabric
-    result.push(
-        "https://meta.fabricmc.net",
-    );
-    result.push(
-        "https://maven.fabricmc.net",
-    );
+    result.push("https://meta.fabricmc.net");
+    result.push("https://maven.fabricmc.net");
 
     // NeoForge
-    result.push(
-        "https://maven.neoforged.net/releases/net/neoforged/forge",
-    );
-    result.push(
-        "https://maven.neoforged.net/releases/net/neoforged/neoforge",
-    );
+    result.push("https://maven.neoforged.net/releases/net/neoforged/forge");
+    result.push("https://maven.neoforged.net/releases/net/neoforged/neoforge");
 
     // Quilt
     // Upstream API currently has bugs; temporarily unavailable.
-    result.push(
-        "https://maven.quiltmc.org/repository/release",
-    );
-    result.push(
-        "https://meta.quiltmc.org",
-    );
-    
+    result.push("https://maven.quiltmc.org/repository/release");
+    result.push("https://meta.quiltmc.org");
+
     result.build()
 });
-
-
 
 static BMCLAPI_REPLACE: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| {
     let mut result = HashMap::new();
 
-    result.insert("https://piston-meta.mojang.com/v1", "https://launchermeta.mojang.com/v1");
-    result.insert("https://piston-meta.mojang.com/mc/game/version_manifest.json", "https://bmclapi2.bangbang93.com/mc/game/version_manifest.json");
+    result.insert(
+        "https://piston-meta.mojang.com/v1",
+        "https://launchermeta.mojang.com/v1",
+    );
+    result.insert(
+        "https://piston-meta.mojang.com/mc/game/version_manifest.json",
+        "https://bmclapi2.bangbang93.com/mc/game/version_manifest.json",
+    );
     // Vanilla manifest / version json / asset index
     result.insert(
         "https://launchermeta.mojang.com/mc/game/version_manifest.json",
@@ -132,7 +106,10 @@ static BMCLAPI_REPLACE: LazyLock<HashMap<&'static str, &'static str>> = LazyLock
         "https://bmclapi2.bangbang93.com/maven",
     );
 
-    result.insert("https://maven.minecraftforge.net", "https://bmclapi2.bangbang93.com/maven");
+    result.insert(
+        "https://maven.minecraftforge.net",
+        "https://bmclapi2.bangbang93.com/maven",
+    );
 
     // LiteLoader
     result.insert(
@@ -176,13 +153,17 @@ static BMCLAPI_REPLACE: LazyLock<HashMap<&'static str, &'static str>> = LazyLock
         "https://meta.quiltmc.org",
         "https://bmclapi2.bangbang93.com/quilt-meta",
     );
-    
+
     result
 });
 
 pub fn replace(origin_url: &str) -> String {
     let origin_url = origin_url.replacen("http://", "https://", 1);
-    if let Some(prefix) = BMCLAPI_TRIE.common_prefix_search(&origin_url).collect::<Vec<String>>().last() {
+    if let Some(prefix) = BMCLAPI_TRIE
+        .common_prefix_search(&origin_url)
+        .collect::<Vec<String>>()
+        .last()
+    {
         if let Some(bmcluri) = BMCLAPI_REPLACE.get(prefix.as_str()) {
             return bmcluri.to_string() + origin_url.strip_prefix(prefix).unwrap_or_default();
         }
@@ -194,24 +175,35 @@ pub async fn request(origin_url: &str) -> Result<Response, anyhow::Error> {
     let real_url = replace(origin_url);
     if let Ok(resp) = reqwest::get(real_url).await {
         if resp.status() == StatusCode::TOO_MANY_REQUESTS {
-            return reqwest::get(origin_url).await.context("origin url request error");
+            return reqwest::get(origin_url)
+                .await
+                .context("origin url request error");
         }
         Ok(resp)
     } else {
-        reqwest::get(origin_url).await.context("origin url request error")
+        reqwest::get(origin_url)
+            .await
+            .context("origin url request error")
     }
 }
 
 pub async fn fetch_json_value(origin_url: &str) -> Result<serde_json::Value, anyhow::Error> {
     let resp = request(origin_url).await?;
-    resp.json::<serde_json::Value>().await.context("解析失败")
+    resp.json::<serde_json::Value>().await.map_err(|e| e.into())
 }
 
 #[test]
 fn test_replace() {
-    assert_eq!(replace("https://piston-meta.mojang.com/mc/game/version_manifest.json"), "https://bmclapi2.bangbang93.com/mc/game/version_manifest.json");
-    assert_eq!(replace("http://resources.download.minecraft.net"),
-        "https://bmclapi2.bangbang93.com/assets",);
-    assert_eq!(replace("http://resources.download.minecraft.net/test"),
-        "https://bmclapi2.bangbang93.com/assets/test",)
+    assert_eq!(
+        replace("https://piston-meta.mojang.com/mc/game/version_manifest.json"),
+        "https://bmclapi2.bangbang93.com/mc/game/version_manifest.json"
+    );
+    assert_eq!(
+        replace("http://resources.download.minecraft.net"),
+        "https://bmclapi2.bangbang93.com/assets",
+    );
+    assert_eq!(
+        replace("http://resources.download.minecraft.net/test"),
+        "https://bmclapi2.bangbang93.com/assets/test",
+    )
 }

@@ -2,7 +2,7 @@
 name = "mc_launcher_core"
 version = "0.1.0"
 description = "Minecraft launcher SDK — offline auth & launch, extensible for online auth"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -17,3 +17,4 @@ futures-util = "0.3"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 trie-rs = "0.4.2"
 bmclapi = { path = "../bmclapi" }
+anyhow = "1.0.102"

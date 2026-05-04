@@ -10,7 +10,8 @@ use super::java::resolve_launch_java_path;
 use super::launch::prepare_launch;
 use super::workspace::{PackConfig, WorkspaceMod};
 
-const MOJANG_MANIFEST_URL: &str = "https://launchermeta.mojang.com/mc/game/version_manifest_v2.json";
+const MOJANG_MANIFEST_URL: &str =
+    "https://launchermeta.mojang.com/mc/game/version_manifest_v2.json";
 const FORGE_MAVEN_BASE: &str = "https://files.minecraftforge.net/maven";
 const NEOFORGE_MAVEN_BASE: &str = "https://maven.neoforged.net/releases";
 const FABRIC_META_BASE: &str = "https://meta.fabricmc.net";
@@ -130,13 +131,13 @@ fn copy_file(src: &Path, dest: &Path) -> Result<(), String> {
             )
         })?;
     } else {
-    std::fs::copy(src, dest).map_err(|e| {
-        format!(
-            "复制文件失败 ({} -> {}): {e}",
-            src.display(),
-            dest.display()
-        )
-    })?;
+        std::fs::copy(src, dest).map_err(|e| {
+            format!(
+                "复制文件失败 ({} -> {}): {e}",
+                src.display(),
+                dest.display()
+            )
+        })?;
     }
 
     Ok(())
@@ -277,19 +278,19 @@ async fn download_file(url: &str, dest: &Path) -> Result<(), String> {
     std::fs::write(dest, bytes).map_err(|e| format!("写入文件失败 ({}): {e}", dest.display()))
 }
 
-async fn fetch_vanilla_server_download(
-    mc_version: &str,
-) -> Result<String, String> {
+async fn fetch_vanilla_server_download(mc_version: &str) -> Result<String, String> {
     let manifest_value = fetch_json(MOJANG_MANIFEST_URL, "获取版本清单").await?;
-    let manifest: VersionManifest = serde_json::from_value(manifest_value)
-        .map_err(|e| format!("解析版本清单失败: {e}"))?;
+    let manifest: VersionManifest =
+        serde_json::from_value(manifest_value).map_err(|e| format!("解析版本清单失败: {e}"))?;
     let entry = manifest
         .versions
         .into_iter()
         .find(|entry| entry.id == mc_version)
         .ok_or_else(|| format!("未找到 MC 版本 {mc_version}"))?;
 
-    let version_value = bmclapi::fetch_json_value(&entry.url).await.map_err(|e| e.to_string())?;
+    let version_value = bmclapi::fetch_json_value(&entry.url)
+        .await
+        .map_err(|e| e.to_string())?;
     let version_json: VanillaVersionJson = serde_json::from_value(version_value)
         .map_err(|e| format!("解析 version.json 失败: {e}"))?;
     let server = version_json
@@ -331,9 +332,17 @@ fn installer_path_for_export(
 ) -> PathBuf {
     let root = mmpc_root().join("cache").join("installers");
     let filename = match loader {
-        LoaderKind::Forge => format!("forge-{}-{}-installer.jar", mc_version, loader_version.trim()),
+        LoaderKind::Forge => format!(
+            "forge-{}-{}-installer.jar",
+            mc_version,
+            loader_version.trim()
+        ),
         LoaderKind::NeoForge => format!("neoforge-{}-installer.jar", loader_version.trim()),
-        LoaderKind::Fabric => format!("fabric-{}-{}-installer.jar", mc_version, loader_version.trim()),
+        LoaderKind::Fabric => format!(
+            "fabric-{}-{}-installer.jar",
+            mc_version,
+            loader_version.trim()
+        ),
         LoaderKind::Vanilla => format!("minecraft-{}-installer.jar", mc_version),
     };
     root.join(filename)
@@ -376,7 +385,10 @@ fn java_bin_relative(include_java: bool) -> &'static str {
 }
 
 fn replace_script_java(script: &str, java_program: &str) -> String {
-    let mut output = script.replace("java @user_jvm_args.txt", &format!("{java_program} @user_jvm_args.txt"));
+    let mut output = script.replace(
+        "java @user_jvm_args.txt",
+        &format!("{java_program} @user_jvm_args.txt"),
+    );
     output = output.replace("java -jar", &format!("{java_program} -jar"));
     output
 }
@@ -403,10 +415,7 @@ fn rewrite_server_script_file(path: &Path, java_program: &str) -> Result<(), Str
     Ok(())
 }
 
-fn ensure_custom_user_jvm_args(
-    export_dir: &Path,
-    pack: &PackConfig,
-) -> Result<(), String> {
+fn ensure_custom_user_jvm_args(export_dir: &Path, pack: &PackConfig) -> Result<(), String> {
     let user_jvm_args = export_dir.join("user_jvm_args.txt");
     if !user_jvm_args.exists() {
         return Ok(());
@@ -421,7 +430,10 @@ fn ensure_custom_user_jvm_args(
         !(trimmed.starts_with("-Xmx") || trimmed.starts_with("-Xms"))
     });
     lines.push(format!("-Xms{}M", pack.min_memory_mb.max(256)));
-    lines.push(format!("-Xmx{}M", pack.max_memory_mb.max(pack.min_memory_mb)));
+    lines.push(format!(
+        "-Xmx{}M",
+        pack.max_memory_mb.max(pack.min_memory_mb)
+    ));
     let content = lines.join("\n");
     std::fs::write(&user_jvm_args, content)
         .map_err(|e| format!("写入 user_jvm_args.txt 失败: {e}"))?;
@@ -546,7 +558,11 @@ async fn export_client_runtime(
         Some(format!(
             "libraries: {}, fabric_loader: {}",
             prepared.libraries_count,
-            if prepared.has_fabric_loader { "yes" } else { "no" }
+            if prepared.has_fabric_loader {
+                "yes"
+            } else {
+                "no"
+            }
         )),
     );
 
@@ -693,7 +709,13 @@ async fn export_installer_server(
         emit_export_progress(app, format!("下载 {label} installer"), 1, 5, None);
         download_file(&installer_url, &installer_path).await?;
     } else {
-        emit_export_progress(app, format!("下载 {label} installer"), 1, 5, Some("使用缓存".to_string()));
+        emit_export_progress(
+            app,
+            format!("下载 {label} installer"),
+            1,
+            5,
+            Some("使用缓存".to_string()),
+        );
     }
 
     let temp_export = mmpc_root().join("tmp").join(format!(

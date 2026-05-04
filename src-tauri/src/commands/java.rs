@@ -98,6 +98,17 @@ fn load_runtimes() -> Result<Vec<JavaRuntime>, String> {
         .map_err(|e| format!("解析 Java 列表失败: {e}"))
 }
 
+fn runtime_path_key(path: &str) -> String {
+    let raw = path.trim();
+    if raw.is_empty() {
+        return String::new();
+    }
+    match std::fs::canonicalize(raw) {
+        Ok(resolved) => resolved.to_string_lossy().to_lowercase(),
+        Err(_) => raw.to_lowercase(),
+    }
+}
+
 fn save_runtimes(list: &[JavaRuntime]) -> Result<(), String> {
     let path = java_json_path();
     if let Some(parent) = path.parent() {
@@ -106,6 +117,39 @@ fn save_runtimes(list: &[JavaRuntime]) -> Result<(), String> {
     let json =
         serde_json::to_string_pretty(list).map_err(|e| format!("序列化 Java 列表失败: {e}"))?;
     fs::write(path, json).map_err(|e| format!("写入 Java 列表失败: {e}"))
+}
+
+fn append_runtime_if_absent(
+    list: &mut Vec<JavaRuntime>,
+    name: &str,
+    path: &str,
+) -> Result<bool, String> {
+    let trimmed_path = path.trim();
+    if trimmed_path.is_empty() {
+        return Ok(false);
+    }
+    let key = runtime_path_key(trimmed_path);
+    if key.is_empty() {
+        return Ok(false);
+    }
+    if list
+        .iter()
+        .any(|runtime| runtime_path_key(&runtime.path) == key)
+    {
+        return Ok(false);
+    }
+
+    let detected = detect_java_version(trimmed_path)?;
+    let runtime = JavaRuntime {
+        id: format!("java-{}", Utc::now().timestamp_millis()),
+        name: name.trim().to_string(),
+        path: trimmed_path.to_string(),
+        version_text: detected.version_text,
+        major_version: detected.major_version,
+        created_at: Utc::now().to_rfc3339(),
+    };
+    list.push(runtime);
+    Ok(true)
 }
 
 #[tauri::command]
@@ -191,4 +235,32 @@ pub fn resolve_launch_java_path(runtime_id: Option<&str>) -> Result<String, Stri
     }
 
     Err("未找到可用的 Java 运行时，请先在“Java 管理”中添加可用的 Java".into())
+}
+
+pub fn auto_register_system_java() -> Result<usize, String> {
+    let mut list = load_runtimes()?;
+    let mut added = 0usize;
+
+    if let Some(java_home) = std::env::var_os("JAVA_HOME") {
+        let java_home_path = PathBuf::from(java_home)
+            .join("bin")
+            .join(java_executable_name());
+        if java_home_path.is_file() {
+            let java_home_bin = java_home_path.to_string_lossy().to_string();
+            if append_runtime_if_absent(&mut list, "System Java (JAVA_HOME)", &java_home_bin)? {
+                added += 1;
+            }
+        }
+    }
+
+    if is_valid_java_binary("java") {
+        if append_runtime_if_absent(&mut list, "System Java (PATH)", "java")? {
+            added += 1;
+        }
+    }
+
+    if added > 0 {
+        save_runtimes(&list)?;
+    }
+    Ok(added)
 }

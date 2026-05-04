@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::auth::offline::OfflineUser;
 use crate::launch::version::{
-    resolve_launch_plan, version_type_or_release, LaunchArgumentContext, LaunchLayout, LaunchPlan,
-    VersionMetadata,
+    LaunchArgumentContext, LaunchLayout, LaunchPlan, VersionMetadata, resolve_launch_plan,
+    version_type_or_release,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,7 +70,8 @@ impl LaunchConfig {
             logging_config: self.logging_config.clone(),
         };
 
-        let mut feature_flags = std::collections::HashMap::from([("is_demo_user".into(), self.demo)]);
+        let mut feature_flags =
+            std::collections::HashMap::from([("is_demo_user".into(), self.demo)]);
         feature_flags.insert(
             "has_custom_resolution".into(),
             self.width.is_some() && self.height.is_some(),
@@ -259,7 +260,9 @@ impl LaunchConfigBuilder {
         let asset_index = self.asset_index.ok_or_else(|| {
             crate::launch::LaunchError::InvalidConfig("asset_index is required".into())
         })?;
-        let library_dir = self.library_dir.unwrap_or_else(|| game_dir.join("versions").join("libraries"));
+        let library_dir = self
+            .library_dir
+            .unwrap_or_else(|| game_dir.join("versions").join("libraries"));
         let natives_dir = self.natives_dir.unwrap_or_else(|| game_dir.join("natives"));
 
         Ok(LaunchConfig {

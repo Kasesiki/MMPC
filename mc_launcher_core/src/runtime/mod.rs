@@ -4,11 +4,17 @@ use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub struct RuntimeLayout {
+    /// workspace文件夹
     pub workspace_dir: PathBuf,
+    /// workspace/versions
     pub versions_dir: PathBuf,
+    /// workspace/versions/libraries
     pub libraries_dir: PathBuf,
+    /// .MMPC/assets
     pub assets_root: PathBuf,
+    /// .MMPC/cache/installers
     pub installers_cache_dir: PathBuf,
+    /// .MMPC/tmp
     pub temp_root: PathBuf,
 }
 
@@ -51,4 +57,5 @@ pub struct RuntimeResult {
 
 pub trait ProgressReporter: Send + Sync {
     fn emit(&self, stage: &str, current: usize, total: usize);
+    fn send(&self, stage: &str);
 }

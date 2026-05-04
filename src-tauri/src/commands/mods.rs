@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use anyhow::{anyhow, Context, Result as AnyResult};
 use mc_launcher_core::runtime::prepare::{mm, wd};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -137,16 +138,18 @@ fn mods_registry_path() -> PathBuf {
 }
 
 /// 读取pack.json并解析为结构体
-fn read_pack_config(id: &str) -> Result<PackConfig, String> {
-    let content = std::fs::read_to_string(pack_json_path(id))
-        .map_err(|e| format!("读取 pack.json 失败: {e}"))?;
-    serde_json::from_str(&content).map_err(|e| format!("解析 pack.json 失败: {e}"))
+fn read_pack_config(id: &str) -> AnyResult<PackConfig> {
+    let path = pack_json_path(id);
+    let content = std::fs::read_to_string(&path)
+        .with_context(|| format!("读取 pack.json 失败: {}", path.display()))?;
+    serde_json::from_str(&content).context("解析 pack.json 失败")
 }
 
-fn write_pack_config(id: &str, config: &PackConfig) -> Result<(), String> {
-    let content =
-        serde_json::to_string_pretty(config).map_err(|e| format!("序列化 pack.json 失败: {e}"))?;
-    std::fs::write(pack_json_path(id), content).map_err(|e| format!("写入 pack.json 失败: {e}"))
+fn write_pack_config(id: &str, config: &PackConfig) -> AnyResult<()> {
+    let content = serde_json::to_string_pretty(config).context("序列化 pack.json 失败")?;
+    let path = pack_json_path(id);
+    std::fs::write(&path, content)
+        .with_context(|| format!("写入 pack.json 失败: {}", path.display()))
 }
 
 fn read_mod_registry() -> Vec<Mod> {
@@ -158,11 +161,11 @@ fn read_mod_registry() -> Vec<Mod> {
     serde_json::from_str::<Vec<Mod>>(&content).unwrap_or(vec![])
 }
 
-fn write_mod_registry(registry: &[Mod]) -> Result<(), String> {
+fn write_mod_registry(registry: &[Mod]) -> AnyResult<()> {
     let path = mods_registry_path();
-    let content = serde_json::to_string_pretty(registry)
-        .map_err(|e| format!("序列化 mods.json 失败: {e}"))?;
-    std::fs::write(path, content).map_err(|e| format!("写入 mods.json 失败: {e}"))
+    let content = serde_json::to_string_pretty(registry).context("序列化 mods.json 失败")?;
+    std::fs::write(&path, content)
+        .with_context(|| format!("写入 mods.json 失败: {}", path.display()))
 }
 
 fn sanitize_filename_component(value: &str) -> String {
@@ -187,24 +190,24 @@ fn build_cached_mod_filename(mod_name: &str, mod_version: &str, mc_version: &str
     )
 }
 
-fn ensure_symlink(src: &Path, dest: &Path) -> Result<(), String> {
+fn ensure_symlink(src: &Path, dest: &Path) -> AnyResult<()> {
     if dest.exists() {
         let metadata = std::fs::symlink_metadata(dest)
-            .map_err(|e| format!("读取 mods 链接失败 ({}): {e}", dest.display()))?;
+            .with_context(|| format!("读取 mods 链接失败 ({})", dest.display()))?;
         if metadata.file_type().is_symlink() || metadata.is_file() {
             std::fs::remove_file(dest)
-                .map_err(|e| format!("移除旧 mods 文件失败 ({}): {e}", dest.display()))?;
+                .with_context(|| format!("移除旧 mods 文件失败 ({})", dest.display()))?;
         } else if metadata.is_dir() {
             std::fs::remove_dir_all(dest)
-                .map_err(|e| format!("移除旧 mods 目录失败 ({}): {e}", dest.display()))?;
+                .with_context(|| format!("移除旧 mods 目录失败 ({})", dest.display()))?;
         }
     }
 
     #[cfg(unix)]
     {
-        std::os::unix::fs::symlink(src, dest).map_err(|e| {
+        std::os::unix::fs::symlink(src, dest).with_context(|| {
             format!(
-                "创建模组软链接失败 ({} -> {}): {e}",
+                "创建模组软链接失败 ({} -> {})",
                 src.display(),
                 dest.display()
             )
@@ -230,15 +233,15 @@ fn ensure_symlink(src: &Path, dest: &Path) -> Result<(), String> {
     }
 }
 
-
 /// Pass 8/10, 验证，清理，连接工作区的mods，保证工作区的mods与传入参数对齐
-fn sync_workspace_mod_links(workspace_id: &str, mods: &[WorkspaceMod]) -> Result<(), String> {
+fn sync_workspace_mod_links(workspace_id: &str, mods: &[WorkspaceMod]) -> AnyResult<()> {
     let mods_dir = workspace_mods_dir(workspace_id);
-    
-    std::fs::create_dir_all(&mods_dir).map_err(|e| format!("创建 mods 目录失败: {e}"))?;
+
+    std::fs::create_dir_all(&mods_dir)
+        .with_context(|| format!("创建 mods 目录失败: {}", mods_dir.display()))?;
 
     let mut expected = std::collections::HashSet::new();
-    
+
     for mod_entry in mods {
         if ModUsageType::from_str(&mod_entry.mod_type) == Some(ModUsageType::ServerOnly) {
             continue;
@@ -255,9 +258,10 @@ fn sync_workspace_mod_links(workspace_id: &str, mods: &[WorkspaceMod]) -> Result
         expected.insert(mod_entry.file_name.clone());
     }
 
-    for entry in std::fs::read_dir(&mods_dir).map_err(|e| format!("读取 mods 目录失败: {e}"))?
+    for entry in std::fs::read_dir(&mods_dir)
+        .with_context(|| format!("读取 mods 目录失败: {}", mods_dir.display()))?
     {
-        let entry = entry.map_err(|e| format!("读取 mods 目录项失败: {e}"))?;
+        let entry = entry.context("读取 mods 目录项失败")?;
         let path = entry.path();
         let file_name = entry.file_name().to_string_lossy().to_string();
         if expected.contains(&file_name) {
@@ -341,12 +345,12 @@ fn upsert_mod_registry_entry(
     registry_key: &str,
     project: &Value,
     mod_type: ModUsageType,
-) -> Result<(), String> {
+) -> AnyResult<()> {
     let mut registry = read_mod_registry();
     let mut object = project
         .as_object()
         .cloned()
-        .ok_or_else(|| "Modrinth 项目详情不是对象结构".to_string())?;
+        .ok_or_else(|| anyhow!("Modrinth 项目详情不是对象结构"))?;
     for key in [
         "versions",
         "game_versions",
@@ -388,7 +392,7 @@ fn update_mod_registry_type(registry_key: &str, mod_type: ModUsageType) -> Resul
         .find(|entry| entry.name == registry_key)
         .ok_or_else(|| format!("mods.json 中未找到模组 {registry_key}"))?;
     entry.mod_type = mod_type;
-    write_mod_registry(&registry)
+    write_mod_registry(&registry).map_err(|e| e.to_string())
 }
 
 async fn fetch_latest_version(
@@ -439,7 +443,7 @@ pub async fn search_modrinth_mods(
     workspace_id: String,
     query: String,
 ) -> Result<Vec<ModrinthProjectHit>, String> {
-    let pack = read_pack_config(&workspace_id)?;
+    let pack = read_pack_config(&workspace_id).map_err(|e| e.to_string())?;
     let facets = if let Some(loader) = normalize_loader_for_modrinth(&pack.loader_type) {
         format!(
             "[[\"project_type:mod\"],[\"versions:{}\"],[\"categories:{}\"]]",
@@ -473,7 +477,7 @@ pub async fn install_modrinth_mod(
     workspace_id: String,
     project_id: String,
 ) -> Result<WorkspaceMod, String> {
-    let mut pack: PackConfig = read_pack_config(&workspace_id)?;
+    let mut pack: PackConfig = read_pack_config(&workspace_id).map_err(|e| e.to_string())?;
     let loader = normalize_loader_for_modrinth(&pack.loader_type);
     let existing_registry_entry = registry_entry_by_project_id(&project_id);
 
@@ -518,50 +522,49 @@ pub async fn install_modrinth_mod(
         .or_else(|| version.files.first())
         .ok_or_else(|| "该模组版本没有可下载文件".to_string())?;
 
-    let (project, mod_name, title, registry_key, mod_type) = if let Some(entry) =
-        existing_registry_entry.clone()
-    {
-        let project = Value::Object(entry.project.clone());
-        let mod_name = project
-            .get("slug")
-            .and_then(|value| value.as_str())
-            .filter(|value| !value.trim().is_empty())
-            .or_else(|| project.get("title").and_then(|value| value.as_str()))
-            .unwrap_or(&project_id)
-            .to_string();
-        let title = project
-            .get("title")
-            .and_then(|value| value.as_str())
-            .unwrap_or(&mod_name)
-            .to_string();
-        let registry_key = mod_registry_key(&title, &mod_name, &project_id);
-        (project, mod_name, title, registry_key, entry.mod_type)
-    } else {
-        let project_url = format!("https://api.modrinth.com/v2/project/{project_id}");
-        let project: serde_json::Value = reqwest::get(&project_url)
-            .await
-            .map_err(|e| format!("请求 Modrinth 项目详情失败: {e}"))?
-            .error_for_status()
-            .map_err(|e| format!("Modrinth 项目详情状态异常: {e}"))?
-            .json()
-            .await
-            .map_err(|e| format!("解析 Modrinth 项目详情失败: {e}"))?;
-        let mod_name = project
-            .get("slug")
-            .and_then(|value| value.as_str())
-            .filter(|value| !value.trim().is_empty())
-            .or_else(|| project.get("title").and_then(|value| value.as_str()))
-            .unwrap_or(&project_id)
-            .to_string();
-        let title = project
-            .get("title")
-            .and_then(|value| value.as_str())
-            .unwrap_or(&mod_name)
-            .to_string();
-        let registry_key = mod_registry_key(&title, &mod_name, &project_id);
-        let mod_type = infer_mod_usage_type(&project);
-        (project, mod_name, title, registry_key, mod_type)
-    };
+    let (project, mod_name, title, registry_key, mod_type) =
+        if let Some(entry) = existing_registry_entry.clone() {
+            let project = Value::Object(entry.project.clone());
+            let mod_name = project
+                .get("slug")
+                .and_then(|value| value.as_str())
+                .filter(|value| !value.trim().is_empty())
+                .or_else(|| project.get("title").and_then(|value| value.as_str()))
+                .unwrap_or(&project_id)
+                .to_string();
+            let title = project
+                .get("title")
+                .and_then(|value| value.as_str())
+                .unwrap_or(&mod_name)
+                .to_string();
+            let registry_key = mod_registry_key(&title, &mod_name, &project_id);
+            (project, mod_name, title, registry_key, entry.mod_type)
+        } else {
+            let project_url = format!("https://api.modrinth.com/v2/project/{project_id}");
+            let project: serde_json::Value = reqwest::get(&project_url)
+                .await
+                .map_err(|e| format!("请求 Modrinth 项目详情失败: {e}"))?
+                .error_for_status()
+                .map_err(|e| format!("Modrinth 项目详情状态异常: {e}"))?
+                .json()
+                .await
+                .map_err(|e| format!("解析 Modrinth 项目详情失败: {e}"))?;
+            let mod_name = project
+                .get("slug")
+                .and_then(|value| value.as_str())
+                .filter(|value| !value.trim().is_empty())
+                .or_else(|| project.get("title").and_then(|value| value.as_str()))
+                .unwrap_or(&project_id)
+                .to_string();
+            let title = project
+                .get("title")
+                .and_then(|value| value.as_str())
+                .unwrap_or(&mod_name)
+                .to_string();
+            let registry_key = mod_registry_key(&title, &mod_name, &project_id);
+            let mod_type = infer_mod_usage_type(&project);
+            (project, mod_name, title, registry_key, mod_type)
+        };
 
     let cached_file_name =
         build_cached_mod_filename(&mod_name, &version.version_number, &pack.mc_version);
@@ -592,28 +595,28 @@ pub async fn install_modrinth_mod(
         mod_type: mod_type.as_str().to_string(),
     };
 
-    upsert_mod_registry_entry(&registry_key, &project, mod_type)?;
+    upsert_mod_registry_entry(&registry_key, &project, mod_type).map_err(|e| e.to_string())?;
 
     //为了不重复
     pack.mods
         .retain(|item| item.project_id != mod_entry.project_id);
-    
+
     pack.mods.push(mod_entry.clone());
-    sync_workspace_mod_links(&workspace_id, &pack.mods)?;
-    write_pack_config(&workspace_id, &pack)?;
+    sync_workspace_mod_links(&workspace_id, &pack.mods).map_err(|e| e.to_string())?;
+    write_pack_config(&workspace_id, &pack).map_err(|e| e.to_string())?;
     Ok(mod_entry)
 }
 
 #[tauri::command]
 pub fn remove_workspace_mod(workspace_id: String, project_id: String) -> Result<(), String> {
-    let mut pack = read_pack_config(&workspace_id)?;
+    let mut pack = read_pack_config(&workspace_id).map_err(|e| e.to_string())?;
     pack.mods.retain(|item| item.project_id != project_id);
-    write_pack_config(&workspace_id, &pack)
+    write_pack_config(&workspace_id, &pack).map_err(|e| e.to_string())
 }
 
 pub fn sync_workspace_mods(workspace_id: String) -> Result<(), String> {
-    let pack: PackConfig = read_pack_config(&workspace_id)?;
-    sync_workspace_mod_links(&workspace_id, &pack.mods)
+    let pack: PackConfig = read_pack_config(&workspace_id).map_err(|e| e.to_string())?;
+    sync_workspace_mod_links(&workspace_id, &pack.mods).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -624,7 +627,7 @@ pub fn update_workspace_mod_type(
 ) -> Result<WorkspaceMod, String> {
     let parsed_mod_type =
         ModUsageType::from_str(&mod_type).ok_or_else(|| format!("无效的模组类型: {mod_type}"))?;
-    let mut pack = read_pack_config(&workspace_id)?;
+    let mut pack = read_pack_config(&workspace_id).map_err(|e| e.to_string())?;
     let mod_entry = pack
         .mods
         .iter_mut()
@@ -637,6 +640,6 @@ pub fn update_workspace_mod_type(
     update_mod_registry_type(&registry_key, parsed_mod_type)?;
     let updated = mod_entry.clone();
 
-    write_pack_config(&workspace_id, &pack)?;
+    write_pack_config(&workspace_id, &pack).map_err(|e| e.to_string())?;
     Ok(updated)
 }

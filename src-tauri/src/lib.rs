@@ -6,6 +6,12 @@ use commands::{export, java, launch, mods, settings, workspace};
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .setup(|_app| {
+            if let Err(err) = java::auto_register_system_java() {
+                eprintln!("[mmpc] auto register system java failed: {err}");
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             workspace::list_workspaces,
             workspace::list_release_versions,
