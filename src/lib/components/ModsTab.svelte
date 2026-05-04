@@ -1,12 +1,13 @@
 <script lang="ts">
-  import { goto } from "$app/navigation";
   import { invoke } from "@tauri-apps/api/core";
+  import ExportModal from "$lib/components/ExportModal.svelte";
   import type { ModrinthProjectHit, ModUsageType, WorkspaceMod } from "$lib/types";
 
   let { workspace }: any = $props();
 
   let searchQuery = $state("");
   let showAddModal = $state(false);
+  let showExportModal = $state(false);
   let searching = $state(false);
   let installingProjectId = $state("");
   let removingProjectId = $state("");
@@ -122,7 +123,7 @@
   <div class="flex items-center justify-between gap-3">
     <h3 class="text-lg font-semibold">模组 ({mods.length})</h3>
     <div class="flex items-center gap-2">
-      <button class="btn btn-outline btn-sm" onclick={() => goto("/export")}>
+      <button class="btn btn-outline btn-sm" onclick={() => { showExportModal = true; }}>
         导出
       </button>
       <button class="btn btn-primary btn-sm" onclick={() => { showAddModal = true; searchResults = []; error = ""; }}>
@@ -185,6 +186,12 @@
     </table>
   {/if}
 </div>
+
+<ExportModal
+  open={showExportModal}
+  workspace={workspace}
+  onclose={() => { showExportModal = false; }}
+/>
 
 {#if showAddModal}
   <div class="modal modal-open">

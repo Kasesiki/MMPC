@@ -247,18 +247,6 @@ pub async fn prepare_runtime(
 
     let client_path = layout.versions_dir.join("client.jar");
 
-    // 目测会被下面的client.jar覆盖导致无作用，注释
-    // if request.loader == LoaderKind::NeoForge {
-    //     reporter.send("下载client.jar....");
-    //     ensure_single_download(
-    //         reporter,
-    //         &base_version_json.downloads.client.url,
-    //         &client_path,
-    //         "下载 client.jar",
-    //         &base_version_json.downloads.client.sha1,
-    //     )
-    //     .await?;
-    // }
 
     // download_version_json根源相同, download_version_json通过格式到VersionJson从而会丢失部分信息
     reporter.send("正在请求loader信息....");
