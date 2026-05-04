@@ -19,7 +19,6 @@ async function handleLaunch() {
     const pid: number = await invoke('launch_game', {
       workspaceId: workspace.id,
       playerName: 'Player',
-      javaPath: null,
     });
     launchStatus.set({ state: 'running', pid });
   } catch (e: any) {

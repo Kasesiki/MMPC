@@ -253,10 +253,10 @@ pub fn auto_register_system_java() -> Result<usize, String> {
         }
     }
 
-    if is_valid_java_binary("java") {
-        if append_runtime_if_absent(&mut list, "System Java (PATH)", "java")? {
-            added += 1;
-        }
+    if is_valid_java_binary("java")
+        && append_runtime_if_absent(&mut list, "System Java (PATH)", "java")?
+    {
+        added += 1;
     }
 
     if added > 0 {

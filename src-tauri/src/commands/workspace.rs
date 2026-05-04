@@ -135,7 +135,7 @@ async fn fetch_json(url: &str, label: &str) -> AnyResult<serde_json::Value> {
         }
     };
     match response.json::<serde_json::Value>().await {
-        Ok(value) => return Ok(value),
+        Ok(value) => Ok(value),
         Err(err) => bail!("{label} 解析失败: {err}"),
     }
 }

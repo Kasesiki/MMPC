@@ -4,11 +4,12 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 use bmclapi::bmclapi;
-use futures_util::{StreamExt, stream};
+use futures_util::{FutureExt, StreamExt, TryFutureExt, stream};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha1::{Digest, Sha1};
-use tokio::fs::File;
-use tokio::io::AsyncWriteExt;
+use tokio::fs::{self, File};
+use tokio::io::{AsyncWriteExt};
 use uuid::Uuid;
 use zip::ZipArchive;
 
@@ -223,28 +224,44 @@ pub async fn prepare_runtime(
     std::fs::create_dir_all(&layout.temp_root)
         .with_context(|| format!("创建临时目录失败: {}", layout.temp_root.display()))?;
 
-    let base_value = fetch_vanilla_version_value(&request.mc_version).await?;
+    reporter.send("获取原版版本清单");
     let inherited_version_json_path = layout
         .versions_dir
         .join(format!("{}.json", request.mc_version));
-    write_json_pretty(&inherited_version_json_path, &base_value)?;
+
+    let base_value: Value = fs::read_to_string(&inherited_version_json_path)
+        .map(|content| serde_json::from_str(&content?).map_err(|e| anyhow!("{e}")))
+        .or_else(|_| async {
+            let result = fetch_vanilla_version_value(&request.mc_version)
+                .await
+                .map(|result| {
+                    let _ = write_json_pretty(&inherited_version_json_path, &result);
+                    result
+                });
+            result
+        })
+        .await?;
+
     let base_version_json: VersionJson =
         serde_json::from_value(base_value.clone()).context("解析基础 version.json 失败")?;
 
     let client_path = layout.versions_dir.join("client.jar");
 
-    if request.loader == LoaderKind::NeoForge {
-        ensure_single_download(
-            reporter,
-            &base_version_json.downloads.client.url,
-            &client_path,
-            "下载 client.jar",
-            &base_version_json.downloads.client.sha1,
-        )
-        .await?;
-    }
+    // 目测会被下面的client.jar覆盖导致无作用，注释
+    // if request.loader == LoaderKind::NeoForge {
+    //     reporter.send("下载client.jar....");
+    //     ensure_single_download(
+    //         reporter,
+    //         &base_version_json.downloads.client.url,
+    //         &client_path,
+    //         "下载 client.jar",
+    //         &base_version_json.downloads.client.sha1,
+    //     )
+    //     .await?;
+    // }
 
     // download_version_json根源相同, download_version_json通过格式到VersionJson从而会丢失部分信息
+    reporter.send("正在请求loader信息....");
     let (download_version_json, launcher_version_json) = match request.loader {
         LoaderKind::Vanilla => {
             // 两者相同
@@ -255,7 +272,6 @@ pub async fn prepare_runtime(
             let loader_version = request
                 .loader_version
                 .as_deref()
-                .map(str::trim)
                 .filter(|v| !v.is_empty())
                 .ok_or_else(|| anyhow!("Fabric 缺少 loader_version"))?;
             let fabric_value =
@@ -279,6 +295,7 @@ pub async fn prepare_runtime(
     write_json_pretty(&version_json_path, &launcher_version_json)?;
 
     // 下载client.jar, 存到工作区的versions文件夹
+    reporter.send("下载client.jar...");
     ensure_single_download(
         reporter,
         &download_version_json.downloads.client.url,
@@ -739,14 +756,9 @@ async fn execute_download_pool(
     tasks: Vec<DownloadTask>,
     concurrency: usize,
 ) -> Result<()> {
-    if tasks.is_empty() {
-        return Ok(());
-    }
-
     let total = tasks.len();
     let mut completed = 0usize;
 
-    // 将任务转化为future并设置并发数
     let mut pending = stream::iter(
         tasks
             .into_iter()

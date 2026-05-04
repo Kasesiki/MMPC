@@ -136,7 +136,7 @@
             <tr class="hover cursor-pointer" onclick={() => goto(`/workspace/${ws.id}`)} role="button" tabindex="0"
               onkeydown={(e) => e.key === "Enter" && goto(`/workspace/${ws.id}`)}>
               <td class="font-medium">{ws.name}</td>
-              <td><span class="badge badge-outline badge-sm">MC {ws.mc_version}</span></td>
+              <td><span class="badge badge-outline badge-sm">MC {ws.mc_version} - {ws.loader_type}{ws.loader_version}</span></td>
               <td>{ws.mod_count} 个</td>
               <td class="text-sm text-base-content/60 max-md:hidden max-w-xs truncate">{ws.description || "—"}</td>
               <td class="text-sm text-base-content/50">{fmt(ws.last_opened)}</td>

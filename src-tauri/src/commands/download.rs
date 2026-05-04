@@ -11,8 +11,14 @@ use super::java::resolve_launch_java_path;
 use super::settings::load_settings;
 use super::workspace::PackConfig;
 
-struct TauriProgressReporter {
+pub struct TauriProgressReporter {
     app: tauri::AppHandle,
+}
+
+impl TauriProgressReporter {
+    pub fn new(app: tauri::AppHandle) -> TauriProgressReporter {
+        TauriProgressReporter { app }
+    }
 }
 
 impl ProgressReporter for TauriProgressReporter {
@@ -65,15 +71,15 @@ fn resolve_workspace_java_path(pack: &PackConfig) -> Result<String> {
 }
 
 pub async fn ensure_workspace_runtime(
-    app: &tauri::AppHandle,
+    reporter: TauriProgressReporter,
     workspace_id: &str,
     mc_version: &str,
 ) -> Result<RuntimeResult> {
+    reporter.send("正在加载配置文件....");
     let settings = load_settings().unwrap_or_default();
     let pack = read_pack_config(workspace_id)?;
-    let reporter = TauriProgressReporter { app: app.clone() };
 
-    let _result = prepare_runtime(
+    let result = prepare_runtime(
         workspace_id,
         &RuntimeRequest {
             mc_version: mc_version.to_string(),
@@ -85,5 +91,5 @@ pub async fn ensure_workspace_runtime(
         &reporter,
     )
     .await?;
-    Ok(_result)
+    Ok(result)
 }

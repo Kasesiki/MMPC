@@ -212,7 +212,7 @@ fn ensure_symlink(src: &Path, dest: &Path) -> AnyResult<()> {
                 dest.display()
             )
         })?;
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(windows)]

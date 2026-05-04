@@ -179,7 +179,7 @@ fn should_include_mod(export_kind: ExportKind, mod_type: &str) -> bool {
     }
 }
 
-fn filter_mods<'a>(mods: &'a Vec<WorkspaceMod>, export_kind: ExportKind) -> Vec<&'a WorkspaceMod> {
+fn filter_mods(mods: &[WorkspaceMod], export_kind: ExportKind) -> Vec<&WorkspaceMod> {
     mods.iter()
         .filter(|mod_entry| should_include_mod(export_kind, &mod_entry.mod_type))
         .collect()
@@ -248,7 +248,7 @@ fn workspace_java_path(pack: &PackConfig) -> Result<String, String> {
 }
 
 async fn fetch_json(url: &str, label: &str) -> Result<serde_json::Value, String> {
-    let response = bmclapi::request(&url)
+    let response = bmclapi::request(url)
         .await
         .map_err(|e| format!("{label} 请求失败: {e}"))?;
     let response = response
@@ -261,7 +261,7 @@ async fn fetch_json(url: &str, label: &str) -> Result<serde_json::Value, String>
 }
 
 async fn download_file(url: &str, dest: &Path) -> Result<(), String> {
-    let response = bmclapi::request(&url)
+    let response = bmclapi::request(url)
         .await
         .map_err(|e| format!("请求失败: {e}"))?;
     let response = response
@@ -505,7 +505,7 @@ async fn export_client_runtime(
 ) -> Result<usize, String> {
     emit_export_progress(app, "准备客户端运行时", 0, 5, None);
     let player_name = pack.name.clone();
-    let prepared = prepare_launch(app, &request.workspace_id, &player_name, None).await?;
+    let prepared = prepare_launch(app, &request.workspace_id, &player_name).await?;
     let source_workspace_dir = workspace_dir(&request.workspace_id);
     let source_assets_dir = mmpc_root().join("assets");
 
@@ -550,21 +550,7 @@ async fn export_client_runtime(
     std::fs::write(&export_argfile, rewritten)
         .map_err(|e| format!("写入导出 java.args 失败: {e}"))?;
     write_launch_scripts(export_dir, &java_program)?;
-    emit_export_progress(
-        app,
-        "完成客户端导出",
-        5,
-        5,
-        Some(format!(
-            "libraries: {}, fabric_loader: {}",
-            prepared.libraries_count,
-            if prepared.has_fabric_loader {
-                "yes"
-            } else {
-                "no"
-            }
-        )),
-    );
+    emit_export_progress(app, "完成客户端导出", 5, 5, None);
 
     Ok(filtered_mods.len())
 }
