@@ -49,13 +49,6 @@
 - `src/lib/types/index.ts`：前后端共用的前端类型定义，包括工作区、配置、Java、设置和启动状态。
 - `src/lib/mock/data.ts`：当前模组页使用的 mock 数据与示例工作区配置。
 
-## 静态资源
-
-- `static/favicon.png`：Web 前端站点图标。
-- `static/svelte.svg`：Svelte 品牌图标，占位静态资源。
-- `static/tauri.svg`：Tauri 品牌图标，占位静态资源。
-- `static/vite.svg`：Vite 品牌图标，占位静态资源。
-
 ## Tauri 后端根配置
 
 - `src-tauri/.gitignore`：Tauri 子工程忽略规则，主要过滤其独立的 `target/` 输出。
@@ -64,25 +57,6 @@
 - `src-tauri/build.rs`：Tauri 构建脚本，交由 `tauri-build` 生成平台相关构建信息。
 - `src-tauri/tauri.conf.json`：Tauri 应用清单，定义窗口、打包、前端资源等桌面参数。
 - `src-tauri/capabilities/default.json`：Tauri 能力声明文件，定义应用默认权限边界。
-
-## Tauri 图标资源
-
-- `src-tauri/icons/32x32.png`：32x32 应用图标资源。
-- `src-tauri/icons/128x128.png`：128x128 应用图标资源。
-- `src-tauri/icons/128x128@2x.png`：高分屏 128 图标资源。
-- `src-tauri/icons/Square30x30Logo.png`：Windows 平台 30x30 方形图标。
-- `src-tauri/icons/Square44x44Logo.png`：Windows 平台 44x44 方形图标。
-- `src-tauri/icons/Square71x71Logo.png`：Windows 平台 71x71 方形图标。
-- `src-tauri/icons/Square89x89Logo.png`：Windows 平台 89x89 方形图标。
-- `src-tauri/icons/Square107x107Logo.png`：Windows 平台 107x107 方形图标。
-- `src-tauri/icons/Square142x142Logo.png`：Windows 平台 142x142 方形图标。
-- `src-tauri/icons/Square150x150Logo.png`：Windows 平台 150x150 方形图标。
-- `src-tauri/icons/Square284x284Logo.png`：Windows 平台 284x284 方形图标。
-- `src-tauri/icons/Square310x310Logo.png`：Windows 平台 310x310 方形图标。
-- `src-tauri/icons/StoreLogo.png`：Windows Store 风格图标。
-- `src-tauri/icons/icon.png`：通用主图标资源。
-- `src-tauri/icons/icon.icns`：macOS 使用的 `.icns` 图标包。
-- `src-tauri/icons/icon.ico`：Windows 使用的 `.ico` 图标包。
 
 ## Tauri 应用入口
 

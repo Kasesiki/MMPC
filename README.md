@@ -1,7 +1,28 @@
-# Tauri + SvelteKit + TypeScript
+一个MC整合包制作器兼启动器
 
-This template should help get you started developing with Tauri, SvelteKit and TypeScript in Vite.
+技术框架：Rust + Tauri + Svelte
 
-## Recommended IDE Setup
+特色为便利整合包制作者，目前处于起步阶段
 
-[VS Code](https://code.visualstudio.com/) + [Svelte](https://marketplace.visualstudio.com/items?itemName=svelte.svelte-vscode) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer).
+TODO
+
+离线模式 ✅
+
+原版 ✅
+
+Fabric ✅
+
+Forge/Neoforge 未稳定
+
+Mod下载 Modrinth
+
+整合包导出 支持客户端/服务端，自动管理导出的mod
+
+Java管理 ✅
+
+下载线路 BMCLAPI, fallback Official
+
+mod组件化 ❌
+
+CurseForge ❌
+

@@ -257,18 +257,6 @@ fn library_key(name: &str) -> String {
     format!("{}:{}:{}@{}", parts[0], parts[1], classifier, ext)
 }
 
-// pub fn merge_version_chain(chain: &[VersionMetadata]) -> Result<VersionMetadata, LaunchError> {
-//     let mut iter = chain.iter();
-//     let Some(first) = iter.next() else {
-//         return Err(LaunchError::InvalidConfig("version chain is empty".into()));
-//     };
-//     let mut merged = first.clone();
-//     for version in iter {
-//         merged = merge_version_metadata(&merged, version);
-//     }
-//     Ok(merged)
-// }
-
 pub fn resolve_launch_plan(
     version: &VersionMetadata,
     layout: LaunchLayout,
