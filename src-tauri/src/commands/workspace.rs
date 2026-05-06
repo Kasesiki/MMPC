@@ -2,7 +2,7 @@
 
 use std::fs;
 use std::path::PathBuf;
-
+use anyhow::anyhow;
 use anyhow::{bail, Context, Result as AnyResult};
 use bmclapi::bmclapi;
 use chrono::Utc;
@@ -138,12 +138,6 @@ async fn fetch_json(url: &str, label: &str) -> AnyResult<serde_json::Value> {
         Ok(value) => Ok(value),
         Err(err) => bail!("{label} 解析失败: {err}"),
     }
-}
-
-async fn fetch_text(url: &str) -> AnyResult<String> {
-    let response = reqwest::get(url).await?;
-    let response = response.error_for_status()?;
-    response.text().await.map_err(|e| e.into())
 }
 
 // ─── Path helpers ───
@@ -535,8 +529,10 @@ fn mc_version_to_neoforge_prefix(mc_version: &str) -> Option<String> {
     mc_version.strip_prefix("1.").map(|rest| rest.to_string())
 }
 
-async fn fetch_maven_metadata_versions(url: &str) -> AnyResult<Vec<String>> {
-    let xml = fetch_text(url).await?;
+async fn fetch_maven_metadata_versions(url: &str) -> anyhow::Result<Vec<String>> {
+    let response = bmclapi::request(url).await?;
+    let response = response.error_for_status()?;
+    let xml = response.text().await.map_err(|e| anyhow!("{}", e.to_string()))?;
     Ok(parse_maven_versions(&xml))
 }
 

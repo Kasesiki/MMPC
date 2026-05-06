@@ -441,7 +441,7 @@ async fn fetch_latest_version(
 #[tauri::command]
 pub async fn search_modrinth_mods(
     workspace_id: String,
-    query: String,
+    query: Option<String>,
 ) -> Result<Vec<ModrinthProjectHit>, String> {
     let pack = read_pack_config(&workspace_id).map_err(|e| e.to_string())?;
     let facets = if let Some(loader) = normalize_loader_for_modrinth(&pack.loader_type) {
@@ -455,10 +455,14 @@ pub async fn search_modrinth_mods(
             pack.mc_version
         )
     };
-    let query = urlencoding::encode(query.trim());
-    let url = format!(
-        "https://api.modrinth.com/v2/search?query={query}&limit=20&index=relevance&facets={facets}"
-    );
+    let base = format!("https://api.modrinth.com/v2/search?limit=20&facets={facets}");
+    let url = match query.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+        Some(query) => format!(
+            "{base}&query={}&index=relevance",
+            urlencoding::encode(query)
+        ),
+        None => format!("{base}&index=downloads"),
+    };
 
     let response: ModrinthSearchResponse = reqwest::get(&url)
         .await

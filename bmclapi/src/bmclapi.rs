@@ -2,7 +2,7 @@
 // AI don't repair that
 
 use anyhow::Context;
-use reqwest::{Response, StatusCode};
+use reqwest::{Response};
 use std::{collections::HashMap, sync::LazyLock};
 use trie_rs::{Trie, TrieBuilder};
 
@@ -174,7 +174,7 @@ pub fn replace(origin_url: &str) -> String {
 pub async fn request(origin_url: &str) -> Result<Response, anyhow::Error> {
     let real_url = replace(origin_url);
     if let Ok(resp) = reqwest::get(real_url).await {
-        if resp.status() == StatusCode::TOO_MANY_REQUESTS {
+        if resp.status() != 200 {
             return reqwest::get(origin_url)
                 .await
                 .context("origin url request error");

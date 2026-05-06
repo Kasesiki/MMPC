@@ -5,6 +5,7 @@ use mc_launcher_core::runtime::LoaderKind;
 use serde::{Deserialize, Serialize};
 use tauri::Emitter;
 use tauri_plugin_opener::OpenerExt;
+use uuid::Uuid;
 
 use super::java::resolve_launch_java_path;
 use super::launch::prepare_launch;
@@ -440,22 +441,10 @@ fn ensure_custom_user_jvm_args(export_dir: &Path, pack: &PackConfig) -> Result<(
     Ok(())
 }
 
-fn export_dir_name(request: &ExportRequest) -> &'static str {
-    match request.export_kind {
-        ExportKind::Client => "client",
-        ExportKind::Server => "server",
-        ExportKind::Full => "full",
-    }
-}
-
 fn prepare_export_dir(request: &ExportRequest) -> Result<PathBuf, String> {
     let tmp_root = mmpc_root().join("tmp");
     std::fs::create_dir_all(&tmp_root).map_err(|e| format!("创建 tmp 目录失败: {e}"))?;
-    let export_dir = tmp_root.join(format!(
-        "{}-export-{}",
-        request.workspace_id,
-        export_dir_name(request)
-    ));
+    let export_dir = tmp_root.join(Uuid::new_v4().to_string());
     remove_dir_if_exists(&export_dir)?;
     std::fs::create_dir_all(&export_dir)
         .map_err(|e| format!("创建导出目录失败 ({}): {e}", export_dir.display()))?;
