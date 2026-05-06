@@ -19,6 +19,16 @@ export interface WorkspaceMod {
   file_name: string;
   title?: string;
   mod_type?: ModUsageType;
+  enabled?: boolean;
+}
+
+export interface WorkspaceModOverview {
+  project_id: string;
+  title: string;
+  mod_name: string;
+  mod_version: string;
+  enabled: boolean;
+  mod_type: ModUsageType;
 }
 
 export type ModUsageType =

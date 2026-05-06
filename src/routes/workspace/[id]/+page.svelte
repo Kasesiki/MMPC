@@ -3,7 +3,7 @@
   import { listen } from "@tauri-apps/api/event";
   import { invoke } from "@tauri-apps/api/core";
   import { activeWorkspaceId, launchStatus, workspaces } from "$lib/stores/workspace";
-  import type { AppSettings, JavaRuntime, ModrinthProjectHit, PackConfig, Workspace, WorkspaceMod } from "$lib/types";
+  import type { AppSettings, JavaRuntime, ModrinthProjectHit, ModUsageType, PackConfig, Workspace, WorkspaceMod, WorkspaceModOverview } from "$lib/types";
 
   type ViewMode = "overview" | "mods" | "export";
   type ExportKind = "client" | "server";
@@ -28,10 +28,15 @@
   let sidebarWidth = $state(312);
   let panelHeight = $state(248);
   let searchQuery = $state("");
+  let installedMods = $state<WorkspaceModOverview[]>([]);
+  let overviewLoading = $state(false);
+  let overviewError = $state("");
+  let togglingProjectId = $state("");
+  let updatingTypeProjectId = $state("");
   let searchResults = $state<ModrinthProjectHit[]>([]);
   let modSearchLoading = $state(false);
   let modSearchError = $state("");
-  let installingProjectId = $state("");
+  let installingProjectIds = $state<string[]>([]);
   let descriptionDraft = $state("");
   let descriptionSaving = $state(false);
   let descriptionError = $state("");
@@ -43,18 +48,18 @@
   let exportError = $state("");
   let exportSuccess = $state("");
   let exportProgress = $state<ExportProgress | null>(null);
-  let exportStages = $state<string[]>([]);
+  let exportLogs = $state<string[]>([]);
   let terminalLogEl = $state<HTMLDivElement | null>(null);
+  let exportLogEl = $state<HTMLDivElement | null>(null);
 
   function pushLog(message: string) {
     gameLogs = [...gameLogs, message].slice(-160);
   }
 
-  function pushExportStage(stage: string) {
-    const trimmed = stage.trim();
+  function pushExportLog(message: string) {
+    const trimmed = message.trim();
     if (!trimmed) return;
-    if (exportStages[exportStages.length - 1] === trimmed) return;
-    exportStages = [...exportStages, trimmed];
+    exportLogs = [...exportLogs, trimmed].slice(-200);
   }
 
   function applyTheme(theme: AppSettings["theme"]) {
@@ -73,6 +78,7 @@
     invoke("get_pack_config", { id }).then((cfg: any) => {
       fullCfg = cfg;
       if (ws) ws = { ...ws, config: cfg };
+      void loadInstalledMods(id);
     }).catch(() => {});
 
     invoke<AppSettings>("get_settings").then((settings) => {
@@ -113,7 +119,10 @@
 
     const unlistenExport = listen<ExportProgress>("export-progress", (event) => {
       exportProgress = event.payload;
-      pushExportStage(event.payload.stage);
+      const progressText = event.payload.total > 0
+        ? `[${event.payload.current}/${event.payload.total}] ${event.payload.stage}`
+        : event.payload.stage;
+      pushExportLog(event.payload.message ? `${progressText} - ${event.payload.message}` : progressText);
     });
 
     return () => {
@@ -130,6 +139,12 @@
   });
 
   $effect(() => {
+    if (viewMode === "overview" && ws && installedMods.length === 0 && !overviewLoading && !overviewError) {
+      void loadInstalledMods(ws.id);
+    }
+  });
+
+  $effect(() => {
     if (viewMode === "mods" && ws && searchResults.length === 0 && !modSearchLoading && !modSearchError) {
       void runModSearch();
     }
@@ -137,6 +152,17 @@
 
   $effect(() => {
     descriptionDraft = fullCfg?.description ?? ws?.description ?? "";
+  });
+
+  $effect(() => {
+    exportLogs.length;
+    if (exportLogEl) {
+      requestAnimationFrame(() => {
+        if (exportLogEl) {
+          exportLogEl.scrollTop = exportLogEl.scrollHeight;
+        }
+      });
+    }
   });
 
   $effect(() => {
@@ -175,6 +201,105 @@
     const current = Number(status.current ?? 0);
     const total = Number(status.total ?? 0);
     return total > 0 ? `${stage} ${current}/${total}` : stage;
+  }
+
+  function modTypeLabel(modType: ModUsageType | string | undefined) {
+    switch (modType) {
+      case "client_only":
+        return "仅客户端";
+      case "server_only":
+        return "仅服务端";
+      case "client_and_server":
+        return "客户端/服务端";
+      case "development_only":
+        return "开发依赖";
+      default:
+        return "未知";
+    }
+  }
+
+  function normalizeWorkspaceMod(mod: WorkspaceMod): WorkspaceMod {
+    return {
+      ...mod,
+      enabled: mod.enabled ?? true,
+    };
+  }
+
+  function syncLocalMod(updated: WorkspaceMod) {
+    const normalized = normalizeWorkspaceMod(updated);
+    const nextMods = (fullCfg?.mods || []).map((item) =>
+      item.project_id === normalized.project_id ? { ...item, ...normalized } : item,
+    );
+    if (fullCfg) {
+      fullCfg = { ...fullCfg, mods: nextMods };
+    }
+    installedMods = installedMods.map((item) =>
+      item.project_id === normalized.project_id
+        ? {
+            ...item,
+            title: normalized.title || item.title,
+            mod_name: normalized.mod_name,
+            mod_version: normalized.mod_version,
+            enabled: normalized.enabled ?? true,
+            mod_type: (normalized.mod_type as ModUsageType | undefined) ?? item.mod_type,
+          }
+        : item,
+    );
+  }
+
+  async function loadInstalledMods(workspaceId: string) {
+    overviewLoading = true;
+    overviewError = "";
+    try {
+      installedMods = await invoke<WorkspaceModOverview[]>("list_workspace_mods", {
+        workspaceId,
+      });
+    } catch (e: any) {
+      overviewError = String(e);
+      installedMods = [];
+    } finally {
+      overviewLoading = false;
+    }
+  }
+
+  async function toggleModEnabled(mod: WorkspaceModOverview, enabled: boolean) {
+    if (!ws?.id || togglingProjectId) return;
+    togglingProjectId = mod.project_id;
+    overviewError = "";
+    try {
+      const updated = await invoke<WorkspaceMod>("set_workspace_mod_enabled", {
+        workspaceId: ws.id,
+        projectId: mod.project_id,
+        enabled,
+      });
+      syncLocalMod(updated);
+      pushLog(`[mod] ${enabled ? "已启用" : "已禁用"} ${mod.title}`);
+    } catch (e: any) {
+      overviewError = String(e);
+      pushLog(`[error] ${String(e)}`);
+    } finally {
+      togglingProjectId = "";
+    }
+  }
+
+  async function updateModType(mod: WorkspaceModOverview, modType: ModUsageType) {
+    if (!ws?.id || updatingTypeProjectId) return;
+    updatingTypeProjectId = mod.project_id;
+    overviewError = "";
+    try {
+      const updated = await invoke<WorkspaceMod>("update_workspace_mod_type", {
+        workspaceId: ws.id,
+        projectId: mod.project_id,
+        modType,
+      });
+      syncLocalMod(updated);
+      pushLog(`[mod] 已更新 ${mod.title} 的类型为 ${modTypeLabel(modType)}`);
+    } catch (e: any) {
+      overviewError = String(e);
+      pushLog(`[error] ${String(e)}`);
+    } finally {
+      updatingTypeProjectId = "";
+    }
   }
 
   async function handleLaunch() {
@@ -337,19 +462,25 @@
     return new Set((fullCfg?.mods || []).map((mod) => mod.project_id));
   }
 
+  function isInstallingProject(projectId: string) {
+    return installingProjectIds.includes(projectId);
+  }
+
   async function addMod(hit: ModrinthProjectHit) {
-    if (!ws?.id || installingProjectId) return;
-    installingProjectId = hit.project_id;
+    if (!ws?.id || isInstallingProject(hit.project_id)) return;
+    installingProjectIds = [...installingProjectIds, hit.project_id];
     modSearchError = "";
     try {
       const installed = await invoke<WorkspaceMod>("install_modrinth_mod", {
         workspaceId: ws.id,
         projectId: hit.project_id,
       });
-      const nextMods = [...(fullCfg?.mods || []).filter((item) => item.project_id !== installed.project_id), installed];
+      const normalized = normalizeWorkspaceMod(installed);
+      const nextMods = [...(fullCfg?.mods || []).filter((item) => item.project_id !== normalized.project_id), normalized];
       if (fullCfg) {
         fullCfg = { ...fullCfg, mods: nextMods };
       }
+      await loadInstalledMods(ws.id);
       ws = { ...ws, mod_count: nextMods.length };
       workspaces.update((list) => list.map((item) => item.id === ws?.id ? { ...item, mod_count: nextMods.length } : item));
       pushLog(`[mod] 已添加 ${hit.title}`);
@@ -357,7 +488,7 @@
       modSearchError = String(e);
       pushLog(`[error] ${String(e)}`);
     } finally {
-      installingProjectId = "";
+      installingProjectIds = installingProjectIds.filter((id) => id !== hit.project_id);
     }
   }
 
@@ -372,8 +503,8 @@
       total: 1,
       message: null,
     };
-    exportStages = [];
-    pushExportStage("等待导出开始");
+    exportLogs = [];
+    pushExportLog("[0/1] 等待导出开始");
     try {
       const result = await invoke<{ export_dir: string }>("export_workspace", {
         request: {
@@ -383,29 +514,15 @@
         },
       });
       exportSuccess = `导出完成：${result.export_dir}`;
-      pushExportStage("导出完成");
+      pushExportLog(`[done] ${exportSuccess}`);
       pushLog(`[export] ${exportSuccess}`);
     } catch (e: any) {
       exportError = String(e);
-      pushExportStage("导出失败");
+      pushExportLog(`[error] ${exportError}`);
       pushLog(`[error] ${exportError}`);
     } finally {
       exporting = false;
     }
-  }
-
-  function exportStepClass(index: number) {
-    const lastIndex = exportStages.length - 1;
-    if (index < lastIndex) return "step-success";
-    if (exportError && index === lastIndex) return "step-error";
-    if (exportSuccess && index === lastIndex) return "step-success";
-    return "step-primary";
-  }
-
-  function editorTitle() {
-    if (viewMode === "mods") return "Mods";
-    if (viewMode === "export") return "Export";
-    return "Explorer";
   }
 </script>
 
@@ -453,7 +570,7 @@
     <aside class="sidebar" style={`grid-column: 2; grid-row: 2; width: ${sidebarWidth}px;`}>
       <div class="sidebar__header">
         <div>
-          <div class="sidebar__eyebrow">{viewMode === "mods" ? "mod" : "explorer"}</div>
+          <div class="sidebar__eyebrow">{viewMode === "mods" ? "mod" : viewMode === "export" ? "export" : "overview"}</div>
           <h1 class="sidebar__title">{ws.name}</h1>
         </div>
       </div>
@@ -511,11 +628,77 @@
     ></button>
 
     <main class="main-editor" style="grid-column: 4; grid-row: 2;">
-      <div class="editor-tabs">
-        <div class="editor-tab">{editorTitle()}</div>
-      </div>
+      {#if viewMode === "overview"}
+        <div class="overview-editor">
+          <div class="overview-header">
+            <div>
+              <div class="panel-heading">Installed Mods</div>
+              <div class="inline-message">查看当前工作区已安装模组，并控制是否在启动时启用。</div>
+            </div>
+            <div class="overview-summary">{installedMods.length} 个模组</div>
+          </div>
 
-      {#if viewMode === "mods"}
+          {#if overviewError}
+            <div class="mod-inline-error">{overviewError}</div>
+          {/if}
+
+          <div class="overview-list-scroll">
+            {#if overviewLoading && installedMods.length === 0}
+              <div class="editor-empty">
+                <h2>Loading Mods</h2>
+                <p>正在读取当前工作区已安装的模组。</p>
+              </div>
+            {:else if installedMods.length === 0}
+              <div class="editor-empty">
+                <h2>No Installed Mods</h2>
+                <p>当前工作区还没有安装模组，可以切换到 Mod 页面进行添加。</p>
+              </div>
+            {:else}
+              <div class="overview-mod-list">
+                {#each installedMods as mod}
+                  <article class="overview-mod-card">
+                    <div class="overview-mod-card__main">
+                      <div class="overview-mod-card__title-row">
+                        <div class="overview-mod-card__title">{mod.title}</div>
+                        <div class={`overview-mod-card__status ${mod.enabled ? "is-enabled" : "is-disabled"}`}>
+                          {mod.enabled ? "已启用" : "已禁用"}
+                        </div>
+                      </div>
+                      <div class="overview-mod-card__meta">
+                        <span>版本 {mod.mod_version}</span>
+                        <span>{mod.mod_name}</span>
+                      </div>
+                      <label class="overview-mod-card__field">
+                        <span>类型</span>
+                        <select
+                          class="select select-bordered select-sm overview-mod-card__select"
+                          value={mod.mod_type}
+                          disabled={updatingTypeProjectId === mod.project_id}
+                          onchange={(e) => updateModType(mod, (e.currentTarget as HTMLSelectElement).value as ModUsageType)}
+                        >
+                          <option value="client_only">仅客户端</option>
+                          <option value="server_only">仅服务端</option>
+                          <option value="client_and_server">双端</option>
+                        </select>
+                      </label>
+                    </div>
+                    <label class="overview-mod-card__toggle">
+                      <span>启用</span>
+                      <input
+                        type="checkbox"
+                        class="toggle toggle-primary"
+                        checked={mod.enabled}
+                        disabled={togglingProjectId === mod.project_id}
+                        onchange={(e) => toggleModEnabled(mod, (e.currentTarget as HTMLInputElement).checked)}
+                      />
+                    </label>
+                  </article>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        </div>
+      {:else if viewMode === "mods"}
         <div class="mod-editor">
           <div class="mod-editor__toolbar">
             <input
@@ -572,9 +755,9 @@
                       <button
                         class="primary-button"
                         onclick={() => addMod(result)}
-                        disabled={installingProjectId === result.project_id || installedIds.has(result.project_id)}
+                        disabled={isInstallingProject(result.project_id) || installedIds.has(result.project_id)}
                       >
-                        {installedIds.has(result.project_id) ? "已安装" : installingProjectId === result.project_id ? "安装中..." : "安装"}
+                        {installedIds.has(result.project_id) ? "已安装" : isInstallingProject(result.project_id) ? "安装中..." : "安装"}
                       </button>
                     </div>
                   </article>
@@ -631,12 +814,12 @@
               </div>
             {/if}
 
-            {#if exportStages.length > 0}
-              <ul class="steps steps-vertical export-steps">
-                {#each exportStages as stage, index}
-                  <li class={`step ${exportStepClass(index)}`}>{stage}</li>
+            {#if exportLogs.length > 0}
+              <div class="export-log" bind:this={exportLogEl}>
+                {#each exportLogs as line}
+                  <div class={`export-log__line ${line.startsWith("[error]") ? "is-error" : ""}`}>{line}</div>
                 {/each}
-              </ul>
+              </div>
             {:else}
               <div class="empty-state export-empty-state">等待导出任务开始。</div>
             {/if}

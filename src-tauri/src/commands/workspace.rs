@@ -49,6 +49,12 @@ pub struct WorkspaceMod {
     pub title: String,
     #[serde(default)]
     pub mod_type: String,
+    #[serde(default = "default_mod_enabled")]
+    pub enabled: bool,
+}
+
+fn default_mod_enabled() -> bool {
+    true
 }
 
 fn deserialize_workspace_mods<'de, D>(deserializer: D) -> Result<Vec<WorkspaceMod>, D::Error>
@@ -69,6 +75,7 @@ where
                 file_name: String::new(),
                 title: String::new(),
                 mod_type: "unknown".to_string(),
+                enabled: true,
             }),
             Value::Object(_) => {
                 let parsed = serde_json::from_value::<WorkspaceMod>(item)

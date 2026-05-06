@@ -8,6 +8,16 @@ use serde_json::{Map, Value};
 use super::workspace::{PackConfig, WorkspaceMod};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceModOverview {
+    pub project_id: String,
+    pub title: String,
+    pub mod_name: String,
+    pub mod_version: String,
+    pub enabled: bool,
+    pub mod_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModrinthVersionSummary {
     pub version_id: String,
     pub version_number: String,
@@ -243,6 +253,9 @@ fn sync_workspace_mod_links(workspace_id: &str, mods: &[WorkspaceMod]) -> AnyRes
     let mut expected = std::collections::HashSet::new();
 
     for mod_entry in mods {
+        if !mod_entry.enabled {
+            continue;
+        }
         if ModUsageType::from_str(&mod_entry.mod_type) == Some(ModUsageType::ServerOnly) {
             continue;
         }
@@ -597,6 +610,7 @@ pub async fn install_modrinth_mod(
         file_name: cached_file_name,
         title,
         mod_type: mod_type.as_str().to_string(),
+        enabled: true,
     };
 
     upsert_mod_registry_entry(&registry_key, &project, mod_type).map_err(|e| e.to_string())?;
@@ -615,6 +629,7 @@ pub async fn install_modrinth_mod(
 pub fn remove_workspace_mod(workspace_id: String, project_id: String) -> Result<(), String> {
     let mut pack = read_pack_config(&workspace_id).map_err(|e| e.to_string())?;
     pack.mods.retain(|item| item.project_id != project_id);
+    sync_workspace_mod_links(&workspace_id, &pack.mods).map_err(|e| e.to_string())?;
     write_pack_config(&workspace_id, &pack).map_err(|e| e.to_string())
 }
 
@@ -644,6 +659,48 @@ pub fn update_workspace_mod_type(
     update_mod_registry_type(&registry_key, parsed_mod_type)?;
     let updated = mod_entry.clone();
 
+    sync_workspace_mod_links(&workspace_id, &pack.mods).map_err(|e| e.to_string())?;
+    write_pack_config(&workspace_id, &pack).map_err(|e| e.to_string())?;
+    Ok(updated)
+}
+
+#[tauri::command]
+pub fn list_workspace_mods(workspace_id: String) -> Result<Vec<WorkspaceModOverview>, String> {
+    let pack = read_pack_config(&workspace_id).map_err(|e| e.to_string())?;
+    Ok(pack
+        .mods
+        .into_iter()
+        .map(|mod_entry| WorkspaceModOverview {
+            project_id: mod_entry.project_id,
+            title: if mod_entry.title.trim().is_empty() {
+                mod_entry.mod_name.clone()
+            } else {
+                mod_entry.title
+            },
+            mod_name: mod_entry.mod_name,
+            mod_version: mod_entry.mod_version,
+            enabled: mod_entry.enabled,
+            mod_type: mod_entry.mod_type,
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub fn set_workspace_mod_enabled(
+    workspace_id: String,
+    project_id: String,
+    enabled: bool,
+) -> Result<WorkspaceMod, String> {
+    let mut pack = read_pack_config(&workspace_id).map_err(|e| e.to_string())?;
+    let mod_entry = pack
+        .mods
+        .iter_mut()
+        .find(|item| item.project_id == project_id)
+        .ok_or_else(|| format!("工作区中未找到模组 {project_id}"))?;
+    mod_entry.enabled = enabled;
+    let updated = mod_entry.clone();
+
+    sync_workspace_mod_links(&workspace_id, &pack.mods).map_err(|e| e.to_string())?;
     write_pack_config(&workspace_id, &pack).map_err(|e| e.to_string())?;
     Ok(updated)
 }
