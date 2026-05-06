@@ -38,9 +38,12 @@ struct VersionEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct VersionJson {
     id: String,
+    /// client.jar, server.jar ,txt加载url
     downloads: VersionDownloads,
+    /// 提供了一个链接用于下载assets
     #[serde(rename = "assetIndex")]
     asset_index: AssetIndex,
+    /// lib列表
     #[serde(default)]
     libraries: Vec<LibraryEntry>,
 }
@@ -264,6 +267,7 @@ pub async fn prepare_runtime(
                 .ok_or_else(|| anyhow!("Fabric 缺少 loader_version"))?;
             let fabric_value =
                 fetch_fabric_version_value(&request.mc_version, loader_version).await?;
+
             let merged = merge_version_json(&base_value, &fabric_value);
             let version_json: VersionJson =
                 serde_json::from_value(merged.clone()).context("解析 Fabric version.json 失败")?;

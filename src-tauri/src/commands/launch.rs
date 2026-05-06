@@ -15,6 +15,7 @@ use mc_launcher_core::launch::version::{
 use mc_launcher_core::runtime::prepare::{mm, wd};
 use mc_launcher_core::runtime::ProgressReporter;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use tauri::Emitter;
 use zip::read::ZipArchive;
 
@@ -61,10 +62,11 @@ fn collect_libraries_from_metadata(
     let mut jars = Vec::new();
 
     for lib in libraries {
+        
         if !evaluate_rules(&lib.rules, current_os, current_arch, &feature_flags) {
             continue;
         }
-
+        println!("{:?} {:?}", lib.name, lib.downloads);
         if let Some(rel_path) = lib
             .downloads
             .as_ref()
@@ -75,6 +77,11 @@ fn collect_libraries_from_metadata(
             if full_path.is_file() {
                 jars.push(full_path);
             }
+        } else {
+            if let Some((a, b)) = lib.name.split_once(":") {
+                jars.push(library_dir.join(PathBuf::from_str(&format!("{}/{}/*", a.replace(".", "/"), b.replace(":", "/"))).unwrap()));
+            }
+        
         }
     }
 
@@ -114,6 +121,7 @@ fn collect_native_libraries_from_metadata(
             .and_then(|entry| resolve_download_path(&entry.path))
         {
             let full_path = library_dir.join(rel_path);
+
             if full_path.is_file() {
                 jars.push(full_path);
             }
@@ -121,29 +129,6 @@ fn collect_native_libraries_from_metadata(
     }
 
     jars
-}
-
-fn load_effective_version_metadata(
-    version_json_path: &Path,
-    inherited_version_json_path: Option<&Path>,
-) -> Result<mc_launcher_core::launch::version::VersionMetadata, String> {
-    let child_raw = std::fs::read_to_string(version_json_path)
-        .map_err(|e| format!("读取 version.json 失败: {e}"))?;
-    let child = parse_version_metadata(&child_raw)
-        .map_err(|e| format!("解析启动元数据失败: {e}"))?;
-
-    if child.inherits_from.is_none() {
-        return Ok(child);
-    }
-
-    let Some(parent_path) = inherited_version_json_path else {
-        return Err("version.json 需要继承父版本，但缺少父版本元数据".to_string());
-    };
-    let parent_raw = std::fs::read_to_string(parent_path)
-        .map_err(|e| format!("读取继承版本元数据失败: {e}"))?;
-    let parent = parse_version_metadata(&parent_raw)
-        .map_err(|e| format!("解析继承版本元数据失败: {e}"))?;
-    Ok(mc_launcher_core::launch::version::merge_version_metadata(&parent, &child))
 }
 
 fn is_native_jar(path: &Path) -> bool {
@@ -223,11 +208,18 @@ pub async fn prepare_launch(
     
     reporter.send("环境准备完毕——");        
     let library_dir = shared_libraries_dir();
-    let child_version_metadata = load_effective_version_metadata(
-        &runtime_result.version_json_path,
-        runtime_result.inherited_version_json_path.as_deref(),
-    )?;
 
+    let child_raw = std::fs::read_to_string(&runtime_result.version_json_path)
+        .map_err(|e| format!("读取 version.json 失败: {e}"))?;
+    let child_version_metadata = parse_version_metadata(&child_raw)
+        .map_err(|e| format!("解析启动元数据失败: {e}"))?;
+    // let child_version_metadata: mc_launcher_core::launch::version::VersionMetadata = load_effective_version_metadata(
+    //     &runtime_result.version_json_path,
+    //     runtime_result.inherited_version_json_path.as_deref(),
+    // )?;
+
+    
+    // 此为lib
     let libraries = collect_libraries_from_metadata(&library_dir, &child_version_metadata.libraries);
     if libraries.is_empty() {
         return Err("未检测到 libraries 依赖，请先下载 MC 版本".into());
