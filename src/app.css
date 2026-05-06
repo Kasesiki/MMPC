@@ -86,12 +86,12 @@ textarea {
   width: min(760px, 100%);
 }
 
-.home-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+.home-flex {
+  display: flex;
   gap: 12px;
   align-items: center;
   justify-content: center;
+  width: 100%;
 }
 
 .entry-card {
@@ -421,22 +421,6 @@ textarea {
   align-content: start;
 }
 
-.sidebar-section {
-  border: 1px solid var(--vscode-border);
-  background: rgba(255, 255, 255, 0.02);
-}
-
-.sidebar-section__header {
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--vscode-border);
-}
-
-.sidebar-section__body {
-  padding: 12px 14px;
-  display: grid;
-  gap: 12px;
-}
-
 .meta-grid {
   display: grid;
   gap: 10px;
@@ -457,16 +441,6 @@ textarea {
 .meta-row__value {
   text-align: right;
   font-size: 13px;
-}
-
-.status-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
-  background: var(--vscode-accent-soft);
-  color: #8ecaff;
-  font-size: 12px;
 }
 
 .workspace-topbar {
@@ -512,7 +486,6 @@ textarea {
   border-radius: 0;
 }
 
-.workspace-switcher,
 .mod-search-input {
   width: 100%;
   border: 1px solid var(--vscode-border-strong);
@@ -522,11 +495,6 @@ textarea {
   outline: none;
 }
 
-.workspace-switcher {
-  min-width: 220px;
-}
-
-.workspace-switcher:focus,
 .mod-search-input:focus {
   border-color: var(--vscode-accent);
   box-shadow: inset 0 0 0 1px var(--vscode-accent);
@@ -698,21 +666,22 @@ textarea {
   text-align: center;
 }
 
-.sidebar-description {
-  color: var(--vscode-text-muted);
+.workspace-description-editor {
+  width: 100%;
+  min-height: 132px;
+  resize: vertical;
+  border: 1px solid var(--vscode-border);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--vscode-text);
+  padding: 10px 12px;
+  outline: none;
+  border-radius: 0;
   line-height: 1.7;
-  font-size: 13px;
 }
 
-.sidebar-description-box {
-  min-height: 120px;
-  resize: none;
-  background: rgba(255, 255, 255, 0.03);
-  color: var(--vscode-text-muted);
-  border-color: var(--vscode-border);
-  border-radius: 0;
-  pointer-events: none;
-  user-select: text;
+.workspace-description-editor:focus {
+  border-color: var(--vscode-accent);
+  box-shadow: inset 0 0 0 1px var(--vscode-accent);
 }
 
 .mod-editor {
@@ -734,32 +703,26 @@ textarea {
   font-size: 13px;
 }
 
-.mod-validator-hint {
-  margin-top: -8px;
-}
-
-.mod-list {
+.mod-results-scroll {
   min-height: 0;
   overflow: auto;
-  display: grid;
-  align-content: start;
-  gap: 12px;
   padding-right: 4px;
 }
 
-.mod-list-frame {
-  background: transparent;
-  border: 1px solid var(--vscode-border);
-  overflow: hidden;
-  border-radius: 0;
+.mod-results {
+  display: grid;
+  align-content: start;
+  gap: 12px;
 }
 
-.mod-list-row {
+.mod-result {
   display: grid;
   grid-template-columns: 48px minmax(0, 1fr) auto;
   align-items: center;
   gap: 14px;
   background: rgba(255, 255, 255, 0.015);
+  border: 1px solid var(--vscode-border);
+  padding: 14px;
   border-radius: 0;
 }
 
@@ -996,12 +959,12 @@ textarea {
   }
 
   .mod-editor__toolbar,
-  .mod-list-row,
+  .mod-result,
   .export-mode-grid {
     grid-template-columns: 1fr;
   }
 
-  .mod-list-row {
+  .mod-result {
     align-items: start;
   }
 

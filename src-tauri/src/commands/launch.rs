@@ -6,12 +6,21 @@ use super::mods::sync_workspace_mods;
 use anyhow::{Context, Result};
 use mc_launcher_core::auth::offline::OfflineUser;
 use mc_launcher_core::launch::offline::{LaunchConfig, OfflineLauncher};
-use mc_launcher_core::launch::version::{default_logging_config_path, parse_version_metadata};
+use mc_launcher_core::launch::version::{
+    Library,
+    default_logging_config_path,
+    evaluate_rules,
+    parse_version_metadata,
+};
 use mc_launcher_core::runtime::prepare::{mm, wd};
 use mc_launcher_core::runtime::ProgressReporter;
 use std::path::{Path, PathBuf};
 use tauri::Emitter;
 use zip::read::ZipArchive;
+
+fn shared_libraries_dir() -> PathBuf {
+    mm().join("libraries")
+}
 
 pub struct PreparedLaunch {
     pub workspace_dir: PathBuf,
@@ -19,40 +28,122 @@ pub struct PreparedLaunch {
     pub argfile_path: PathBuf,
 }
 
-/// Collect all .jar library paths under versions/libraries/ recursively
-fn collect_libraries(ws: &Path) -> Vec<PathBuf> {
-    let libs_dir = ws.join("versions").join("libraries");
-    let mut jars = Vec::new();
-    if !libs_dir.exists() {
-        return jars;
+fn resolve_download_path(path: &Option<String>) -> Option<PathBuf> {
+    path.as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
+
+fn native_classifier_for_current_os() -> String {
+    let arch = std::env::consts::ARCH;
+    match mc_launcher_core::launch::version::detect_os_name() {
+        "windows" => {
+            if arch == "x86_64" {
+                "natives-windows-64".to_string()
+            } else {
+                "natives-windows-32".to_string()
+            }
+        }
+        "osx" => "natives-osx".to_string(),
+        "linux" => format!("natives-linux-{arch}"),
+        other => format!("natives-{other}"),
     }
-    if let Ok(entries) = std::fs::read_dir(&libs_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                // Recurse into subdirectories (libraries are stored as Maven paths)
-                jars.extend(collect_libs_recursive(&path));
-            } else if path.extension().is_some_and(|e| e == "jar") {
-                jars.push(path);
+}
+
+fn collect_libraries_from_metadata(
+    library_dir: &Path,
+    libraries: &[Library],
+) -> Vec<PathBuf> {
+    let current_os = mc_launcher_core::launch::version::detect_os_name();
+    let current_arch = std::env::consts::ARCH;
+    let feature_flags = std::collections::HashMap::new();
+    let mut jars = Vec::new();
+
+    for lib in libraries {
+        if !evaluate_rules(&lib.rules, current_os, current_arch, &feature_flags) {
+            continue;
+        }
+
+        if let Some(rel_path) = lib
+            .downloads
+            .as_ref()
+            .and_then(|downloads| downloads.artifact.as_ref())
+            .and_then(|artifact| resolve_download_path(&artifact.path))
+        {
+            let full_path = library_dir.join(rel_path);
+            if full_path.is_file() {
+                jars.push(full_path);
             }
         }
     }
+
     jars
 }
 
-fn collect_libs_recursive(dir: &PathBuf) -> Vec<PathBuf> {
+fn collect_native_libraries_from_metadata(
+    library_dir: &Path,
+    libraries: &[Library],
+) -> Vec<PathBuf> {
+    let current_os = mc_launcher_core::launch::version::detect_os_name();
+    let current_arch = std::env::consts::ARCH;
+    let feature_flags = std::collections::HashMap::new();
+    let fallback_classifier = native_classifier_for_current_os();
     let mut jars = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                jars.extend(collect_libs_recursive(&path));
-            } else if path.extension().is_some_and(|e| e == "jar") {
-                jars.push(path);
+
+    for lib in libraries {
+        if !evaluate_rules(&lib.rules, current_os, current_arch, &feature_flags) {
+            continue;
+        }
+
+        let native_classifier = lib
+            .natives
+            .get(current_os)
+            .cloned()
+            .unwrap_or_else(|| fallback_classifier.clone())
+            .replace(
+                "${arch}",
+                if cfg!(target_pointer_width = "64") { "64" } else { "32" },
+            );
+
+        if let Some(rel_path) = lib
+            .downloads
+            .as_ref()
+            .and_then(|downloads| downloads.classifiers.as_ref())
+            .and_then(|classifiers| classifiers.get(&native_classifier))
+            .and_then(|entry| resolve_download_path(&entry.path))
+        {
+            let full_path = library_dir.join(rel_path);
+            if full_path.is_file() {
+                jars.push(full_path);
             }
         }
     }
+
     jars
+}
+
+fn load_effective_version_metadata(
+    version_json_path: &Path,
+    inherited_version_json_path: Option<&Path>,
+) -> Result<mc_launcher_core::launch::version::VersionMetadata, String> {
+    let child_raw = std::fs::read_to_string(version_json_path)
+        .map_err(|e| format!("读取 version.json 失败: {e}"))?;
+    let child = parse_version_metadata(&child_raw)
+        .map_err(|e| format!("解析启动元数据失败: {e}"))?;
+
+    if child.inherits_from.is_none() {
+        return Ok(child);
+    }
+
+    let Some(parent_path) = inherited_version_json_path else {
+        return Err("version.json 需要继承父版本，但缺少父版本元数据".to_string());
+    };
+    let parent_raw = std::fs::read_to_string(parent_path)
+        .map_err(|e| format!("读取继承版本元数据失败: {e}"))?;
+    let parent = parse_version_metadata(&parent_raw)
+        .map_err(|e| format!("解析继承版本元数据失败: {e}"))?;
+    Ok(mc_launcher_core::launch::version::merge_version_metadata(&parent, &child))
 }
 
 fn is_native_jar(path: &Path) -> bool {
@@ -131,13 +222,19 @@ pub async fn prepare_launch(
             .map_err(|e| e.to_string())?;
     
     reporter.send("环境准备完毕——");        
-    // Collect all library JARs into classpath
-    let libraries = collect_libraries(&ws);
+    let library_dir = shared_libraries_dir();
+    let child_version_metadata = load_effective_version_metadata(
+        &runtime_result.version_json_path,
+        runtime_result.inherited_version_json_path.as_deref(),
+    )?;
+
+    let libraries = collect_libraries_from_metadata(&library_dir, &child_version_metadata.libraries);
     if libraries.is_empty() {
         return Err("未检测到 libraries 依赖，请先下载 MC 版本".into());
     }
 
-    prepare_natives_dir(&ws, &libraries).map_err(|e| e.to_string())?;
+    let native_libraries = collect_native_libraries_from_metadata(&library_dir, &child_version_metadata.libraries);
+    prepare_natives_dir(&ws, &native_libraries).map_err(|e| e.to_string())?;
 
     // Collect JVM args
     pack.jvm_args.extend(
@@ -160,18 +257,12 @@ pub async fn prepare_launch(
 
     let java_path = resolve_launch_java_path(pack.java_runtime_id.as_deref())?;
 
-    let version_meta_raw = std::fs::read_to_string(&runtime_result.version_json_path)
-        .map_err(|e| format!("读取 version.json 失败: {e}"))?;
-    let child_version_metadata = parse_version_metadata(&version_meta_raw)
-        .map_err(|e| format!("解析启动元数据失败: {e}"))?;
-    
     let asset_index_id = child_version_metadata.asset_index.as_ref()
     .map(|index| index.id.clone())
     .unwrap_or(pack.mc_version);
 
     let assets_dir = mm().join("assets");
 
-    let library_dir = runtime_result.version_json_path.join("libraries");
     let natives_dir = ws.join("natives");
     let logging_config = child_version_metadata
         .logging
@@ -329,4 +420,42 @@ pub fn stop_game(pid: u32) -> Result<(), String> {
 
     #[allow(unreachable_code)]
     Err("当前平台暂不支持关闭游戏进程".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mc_launcher_core::launch::version::{DownloadFile, LibraryDownloads};
+
+    #[test]
+    fn collects_only_libraries_declared_in_metadata() {
+        let temp = std::env::temp_dir().join(format!("mmpc-launch-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(temp.join("com/example/keep/1.0")).unwrap();
+        std::fs::create_dir_all(temp.join("com/example/skip/2.0")).unwrap();
+        std::fs::write(temp.join("com/example/keep/1.0/keep-1.0.jar"), b"jar").unwrap();
+        std::fs::write(temp.join("com/example/skip/2.0/skip-2.0.jar"), b"jar").unwrap();
+
+        let libraries = vec![Library {
+            name: "com.example:keep:1.0".to_string(),
+            downloads: Some(LibraryDownloads {
+                artifact: Some(DownloadFile {
+                    id: None,
+                    sha1: None,
+                    size: None,
+                    url: None,
+                    path: Some("com/example/keep/1.0/keep-1.0.jar".to_string()),
+                }),
+                classifiers: None,
+            }),
+            ..Default::default()
+        }];
+
+        let resolved = collect_libraries_from_metadata(&temp, &libraries);
+        assert_eq!(resolved.len(), 1);
+        assert!(resolved[0].ends_with("com/example/keep/1.0/keep-1.0.jar"));
+        assert!(!resolved.iter().any(|path| path.ends_with("skip-2.0.jar")));
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
 }

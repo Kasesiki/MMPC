@@ -32,6 +32,9 @@
   let modSearchLoading = $state(false);
   let modSearchError = $state("");
   let installingProjectId = $state("");
+  let descriptionDraft = $state("");
+  let descriptionSaving = $state(false);
+  let descriptionError = $state("");
   let currentTheme = $state<AppSettings["theme"]>("dark");
   let savingTheme = $state(false);
   let exportKind = $state<ExportKind>("client");
@@ -42,7 +45,6 @@
   let exportProgress = $state<ExportProgress | null>(null);
   let exportStages = $state<string[]>([]);
   let terminalLogEl = $state<HTMLDivElement | null>(null);
-  const modSearchPattern = "^$|^.{2,80}$";
 
   function pushLog(message: string) {
     gameLogs = [...gameLogs, message].slice(-160);
@@ -131,6 +133,10 @@
     if (viewMode === "mods" && ws && searchResults.length === 0 && !modSearchLoading && !modSearchError) {
       void runModSearch();
     }
+  });
+
+  $effect(() => {
+    descriptionDraft = fullCfg?.description ?? ws?.description ?? "";
   });
 
   $effect(() => {
@@ -247,6 +253,30 @@
       javaErr = String(e);
     } finally {
       javaSaving = false;
+    }
+  }
+
+  async function saveDescription() {
+    const nextDescription = descriptionDraft.trim();
+    if (!ws || !fullCfg || descriptionSaving || nextDescription === (fullCfg.description ?? "").trim()) {
+      return;
+    }
+    descriptionSaving = true;
+    descriptionError = "";
+    try {
+      const nextCfg = {
+        ...fullCfg,
+        description: nextDescription,
+      };
+      await invoke("save_pack_config", { id: ws.id, config: nextCfg });
+      fullCfg = nextCfg as PackConfig;
+      ws = { ...ws, description: nextDescription };
+      workspaces.update((list) => list.map((item) => item.id === ws?.id ? { ...item, description: nextDescription } : item));
+      pushLog("[info] 工作区描述已保存");
+    } catch (e: any) {
+      descriptionError = String(e);
+    } finally {
+      descriptionSaving = false;
     }
   }
 
@@ -451,8 +481,21 @@
 
         <button class="ghost-button" onclick={openJavaModal}>配置 Java</button>
 
-        <div class="panel-heading">Description</div>
-        <textarea class="textarea textarea-bordered sidebar-description-box" readonly>{ws.description || "当前工作区还没有描述。"}</textarea>
+        <label class="panel-heading" for="workspace-description">Description</label>
+        <textarea
+          id="workspace-description"
+          class="workspace-description-editor"
+          bind:value={descriptionDraft}
+          placeholder="输入工作区描述..."
+          onblur={saveDescription}
+          onkeydown={(e) => (e.key === "Enter" && (e.metaKey || e.ctrlKey)) && saveDescription()}
+        ></textarea>
+        {#if descriptionSaving}
+          <div class="inline-message">正在保存描述...</div>
+        {/if}
+        {#if descriptionError}
+          <div class="inline-message" style="color: var(--vscode-danger);">{descriptionError}</div>
+        {/if}
 
         {#if status.state === "error"}
           <div class="inline-message" style="color: var(--vscode-danger);">{status.message}</div>
@@ -476,10 +519,8 @@
         <div class="mod-editor">
           <div class="mod-editor__toolbar">
             <input
-              class="input input-bordered validator mod-search-input"
+              class="mod-search-input"
               type="text"
-              pattern={modSearchPattern}
-              title="留空显示热门模组，输入时至少 2 个字符"
               placeholder="搜索 Modrinth 模组，留空显示热门模组"
               bind:value={searchQuery}
               onkeydown={(e) => e.key === "Enter" && runModSearch()}
@@ -488,11 +529,12 @@
               {modSearchLoading ? "加载中..." : "搜索"}
             </button>
           </div>
+          <div class="inline-message">留空显示热门模组，输入关键词后按回车或点击搜索。</div>
           {#if modSearchError}
             <div class="mod-inline-error">{modSearchError}</div>
           {/if}
 
-          <div class="mod-list">
+          <div class="mod-results-scroll">
             {#if modSearchLoading && searchResults.length === 0}
               <div class="editor-empty">
                 <h2>Loading Mods</h2>
@@ -505,9 +547,9 @@
               </div>
             {:else}
               {@const installedIds = installedProjectIds()}
-              <ul class="list bg-base-200 mod-list-frame">
+              <div class="mod-results">
                 {#each searchResults as result}
-                  <li class="list-row mod-list-row">
+                  <article class="mod-result">
                     <div class="mod-list-icon">
                       {#if result.icon_url}
                         <div class="mod-list-icon-box">
@@ -524,8 +566,7 @@
                         <div class="mod-list-item__title">{result.title}</div>
                         <div class="mod-list-item__badge">{result.downloads.toLocaleString()} downloads</div>
                       </div>
-                      <div class="mod-list-item__slug">{result.slug}</div>
-                      <p class="mod-list-item__desc">{result.description}</p>
+                      <p class="mod-list-item__desc" style="margin-top: 4px;">{result.description}</p>
                     </div>
                     <div class="mod-list-item__actions">
                       <button
@@ -536,9 +577,9 @@
                         {installedIds.has(result.project_id) ? "已安装" : installingProjectId === result.project_id ? "安装中..." : "安装"}
                       </button>
                     </div>
-                  </li>
+                  </article>
                 {/each}
-              </ul>
+              </div>
             {/if}
           </div>
         </div>

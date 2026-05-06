@@ -8,7 +8,7 @@ pub struct RuntimeLayout {
     pub workspace_dir: PathBuf,
     /// workspace/versions
     pub versions_dir: PathBuf,
-    /// workspace/versions/libraries
+    /// .MMPC/libraries
     pub libraries_dir: PathBuf,
     /// .MMPC/assets
     pub assets_root: PathBuf,

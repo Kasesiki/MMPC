@@ -1,13 +1,9 @@
-import { writable, derived } from "svelte/store";
+import { writable } from "svelte/store";
 import { invoke } from "@tauri-apps/api/core";
 import type { Workspace, LaunchStatus, LoaderVersionOption } from "$lib/types";
 
 export const workspaces = writable<Workspace[]>([]);
 export const activeWorkspaceId = writable<string | null>(null);
-export const activeWorkspace = derived(
-  [workspaces, activeWorkspaceId],
-  ([$workspaces, $id]) => $workspaces.find((w) => w.id === $id) ?? null,
-);
 export const launchStatus = writable<LaunchStatus>({ state: "idle" });
 
 export async function loadWorkspaces(): Promise<void> {

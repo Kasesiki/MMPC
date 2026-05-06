@@ -88,6 +88,10 @@ fn mmpc_root() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".MMPC"))
 }
 
+fn shared_libraries_dir() -> PathBuf {
+    mmpc_root().join("libraries")
+}
+
 fn workspace_dir(id: &str) -> PathBuf {
     mmpc_root().join("workspaces").join(id)
 }
@@ -190,6 +194,7 @@ fn rewrite_argfile_paths(
     content: &str,
     source_workspace_dir: &Path,
     source_assets_dir: &Path,
+    source_libraries_dir: &Path,
     export_dir: &Path,
 ) -> String {
     let source = source_workspace_dir.to_string_lossy();
@@ -197,8 +202,12 @@ fn rewrite_argfile_paths(
     let source_assets = source_assets_dir.to_string_lossy();
     let target_assets = export_dir.join("assets");
     let target_assets = target_assets.to_string_lossy();
+    let source_libraries = source_libraries_dir.to_string_lossy();
+    let target_libraries = export_dir.join("libraries");
+    let target_libraries = target_libraries.to_string_lossy();
     content
         .replace(source.as_ref(), target.as_ref())
+        .replace(source_libraries.as_ref(), target_libraries.as_ref())
         .replace(source_assets.as_ref(), target_assets.as_ref())
 }
 
@@ -441,7 +450,7 @@ fn ensure_custom_user_jvm_args(export_dir: &Path, pack: &PackConfig) -> Result<(
     Ok(())
 }
 
-fn prepare_export_dir(request: &ExportRequest) -> Result<PathBuf, String> {
+fn prepare_export_dir(_request: &ExportRequest) -> Result<PathBuf, String> {
     let tmp_root = mmpc_root().join("tmp");
     std::fs::create_dir_all(&tmp_root).map_err(|e| format!("创建 tmp 目录失败: {e}"))?;
     let export_dir = tmp_root.join(Uuid::new_v4().to_string());
@@ -497,6 +506,7 @@ async fn export_client_runtime(
     let prepared = prepare_launch(app, &request.workspace_id, &player_name).await?;
     let source_workspace_dir = workspace_dir(&request.workspace_id);
     let source_assets_dir = mmpc_root().join("assets");
+    let source_libraries_dir = shared_libraries_dir();
 
     emit_export_progress(app, "复制版本文件", 1, 5, None);
     copy_dir_recursive(
@@ -505,6 +515,7 @@ async fn export_client_runtime(
     )?;
 
     emit_export_progress(app, "复制本地库与 natives", 2, 5, None);
+    copy_dir_recursive(&source_libraries_dir, &export_dir.join("libraries"))?;
     copy_dir_recursive(
         &source_workspace_dir.join("natives"),
         &export_dir.join("natives"),
@@ -530,6 +541,7 @@ async fn export_client_runtime(
         &argfile_content,
         &source_workspace_dir,
         &source_assets_dir,
+        &source_libraries_dir,
         export_dir,
     );
     let export_argfile = export_dir.join("launch").join("java.args");
@@ -863,10 +875,11 @@ mod tests {
     fn rewrites_paths_and_java() {
         let source = PathBuf::from("/tmp/source");
         let assets = PathBuf::from("/tmp/.MMPC/assets");
+        let libraries = PathBuf::from("/tmp/.MMPC/libraries");
         let target = PathBuf::from("/tmp/export");
-        let input = "-cp /tmp/source/versions/libraries/a.jar Main --gameDir /tmp/source --assetsDir /tmp/.MMPC/assets";
-        let output = rewrite_argfile_paths(input, &source, &assets, &target);
-        assert!(output.contains("/tmp/export/versions/libraries/a.jar"));
+        let input = "-cp /tmp/.MMPC/libraries/a.jar Main --gameDir /tmp/source --assetsDir /tmp/.MMPC/assets";
+        let output = rewrite_argfile_paths(input, &source, &assets, &libraries, &target);
+        assert!(output.contains("/tmp/export/libraries/a.jar"));
         assert!(output.contains("--gameDir /tmp/export"));
         assert!(output.contains("--assetsDir /tmp/export/assets"));
     }

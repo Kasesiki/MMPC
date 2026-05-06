@@ -103,7 +103,7 @@
 
 <div class="home-shell">
   <div class="home-stage">
-    <div class="home-grid">
+    <div class="home-flex">
       <button class="entry-card" onclick={() => (showWorkspacePicker = true)}>
         <div>
           <h1 class="entry-card__title">Open Source</h1>

@@ -86,9 +86,21 @@ pub struct AssetIndexRef {
 pub struct Library {
     pub name: String,
     #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub downloads: Option<LibraryDownloads>,
+    #[serde(default)]
     pub rules: Vec<Rule>,
     #[serde(default)]
     pub natives: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct LibraryDownloads {
+    #[serde(default)]
+    pub artifact: Option<DownloadFile>,
+    #[serde(default)]
+    pub classifiers: Option<HashMap<String, DownloadFile>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

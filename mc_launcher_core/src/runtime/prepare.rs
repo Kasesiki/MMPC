@@ -196,7 +196,7 @@ pub fn build_runtime_layout(workspace_id: &str) -> RuntimeLayout {
     RuntimeLayout {
         workspace_dir: workspace_dir.clone(),
         versions_dir: versions_dir(workspace_id),
-        libraries_dir: workspace_dir.join("versions").join("libraries"),
+        libraries_dir: root.join("libraries"),
         assets_root: root.join("assets"),
         installers_cache_dir: root.join("cache").join("installers"),
         temp_root: root.join("tmp"),
@@ -305,7 +305,7 @@ pub async fn prepare_runtime(
     )
     .await?;
 
-    // 下载library, 存到工作区的versions/libraries文件夹
+    // 下载 library，存到全局共享的 .MMPC/libraries 文件夹
     let library_tasks: Vec<DownloadTask> =
         build_library_tasks(&layout.libraries_dir, &download_version_json)?;
     execute_download_pool(
@@ -1165,14 +1165,6 @@ async fn ensure_neoforge_runtime_from_installer(
         ));
     }
 
-    if layout.libraries_dir.exists() {
-        std::fs::remove_dir_all(&layout.libraries_dir).with_context(|| {
-            format!(
-                "清理旧 libraries 目录失败: {}",
-                layout.libraries_dir.display()
-            )
-        })?;
-    }
     let allowed_runtime_paths = collect_runtime_library_paths(
         &temp_dir.join("libraries"),
         &version_json,
@@ -1609,14 +1601,6 @@ async fn ensure_loader_runtime_from_installer(
     )
     .context("解析 installer version.json 失败")?;
 
-    if layout.libraries_dir.exists() {
-        std::fs::remove_dir_all(&layout.libraries_dir).with_context(|| {
-            format!(
-                "清理旧 libraries 目录失败: {}",
-                layout.libraries_dir.display()
-            )
-        })?;
-    }
     let temp_libraries_dir = temp_dir.join("libraries");
     let allowed_runtime_paths = collect_runtime_library_paths(
         &temp_libraries_dir,
