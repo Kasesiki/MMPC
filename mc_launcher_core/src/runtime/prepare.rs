@@ -1510,7 +1510,6 @@ async fn ensure_loader_runtime_from_installer(
             .ok_or_else(|| anyhow!("无法确定 loader client 产物路径"))?;
     let expected_id = match request.loader {
         LoaderKind::Forge => format!("{}-forge-{}", request.mc_version, loader_version),
-        LoaderKind::NeoForge => format!("neoforge-{}", loader_version),
         _ => String::new(),
     };
 

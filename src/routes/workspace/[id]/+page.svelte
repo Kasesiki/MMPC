@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { goto } from "$app/navigation";
   import { listen } from "@tauri-apps/api/event";
   import { invoke } from "@tauri-apps/api/core";
   import { activeWorkspaceId, launchStatus, workspaces } from "$lib/stores/workspace";
@@ -19,10 +20,6 @@
   let ws = $state<Workspace | null>(null);
   let fullCfg = $state<PackConfig | null>(null);
   let javaList = $state<JavaRuntime[]>([]);
-  let showJavaModal = $state(false);
-  let javaSaving = $state(false);
-  let selectedJavaId = $state("");
-  let javaErr = $state("");
   let gameLogs = $state<string[]>([]);
   let viewMode = $state<ViewMode>("overview");
   let sidebarWidth = $state(312);
@@ -354,33 +351,6 @@
     }
   }
 
-  function openJavaModal() {
-    if (!fullCfg) return;
-    selectedJavaId = fullCfg.java_runtime_id || "";
-    javaErr = "";
-    showJavaModal = true;
-  }
-
-  async function saveJavaSelection() {
-    if (!ws || !fullCfg || javaSaving) return;
-    javaSaving = true;
-    javaErr = "";
-    try {
-      const nextCfg = {
-        ...fullCfg,
-        java_runtime_id: selectedJavaId || null,
-      };
-      await invoke("save_pack_config", { id: ws.id, config: nextCfg });
-      fullCfg = nextCfg as PackConfig;
-      showJavaModal = false;
-      pushLog(`[info] Java 运行时已切换为 ${currentJavaLabel()}`);
-    } catch (e: any) {
-      javaErr = String(e);
-    } finally {
-      javaSaving = false;
-    }
-  }
-
   async function saveDescription() {
     const nextDescription = descriptionDraft.trim();
     if (!ws || !fullCfg || descriptionSaving || nextDescription === (fullCfg.description ?? "").trim()) {
@@ -596,7 +566,7 @@
           </div>
         </div>
 
-        <button class="ghost-button" onclick={openJavaModal}>配置 Java</button>
+        <button class="ghost-button" onclick={() => goto(`/java?workspaceId=${params.id}`)}>配置 Java</button>
 
         <label class="panel-heading" for="workspace-description">Description</label>
         <textarea
@@ -890,57 +860,6 @@
     <div class="panel panel--narrow">
       <div class="panel__body">
         <div class="empty-state">工作区未找到</div>
-      </div>
-    </div>
-  </div>
-{/if}
-
-{#if showJavaModal}
-  <div
-    class="overlay"
-    role="button"
-    tabindex="0"
-    aria-label="关闭 Java 配置"
-    onclick={() => (showJavaModal = false)}
-    onkeydown={(e) => (e.key === "Enter" || e.key === "Escape") && (showJavaModal = false)}
-  >
-    <div
-      class="panel panel--narrow"
-      role="dialog"
-      aria-modal="true"
-      tabindex="-1"
-      onclick={(e) => e.stopPropagation()}
-      onkeydown={(e) => e.stopPropagation()}
-    >
-      <div class="panel__header">
-        <div>
-          <h2 class="panel__title">配置 Java</h2>
-          <div class="panel__subtitle">选择启动当前工作区时使用的 Java 运行时</div>
-        </div>
-        <button class="icon-button" onclick={() => (showJavaModal = false)} aria-label="关闭">×</button>
-      </div>
-      <div class="panel__body">
-        <div class="field">
-          <label for="java-select">Java Runtime</label>
-          <select id="java-select" bind:value={selectedJavaId}>
-            <option value="">默认（系统 Java）</option>
-            {#each javaList as j}
-              <option value={j.id}>{j.name} - {j.major_version ? `Java ${j.major_version}` : j.version_text}</option>
-            {/each}
-          </select>
-          {#if javaList.length === 0}
-            <div class="inline-message">还没有可用 Java，请先到 Java 管理页面添加。</div>
-          {/if}
-          {#if javaErr}
-            <div class="inline-message" style="color: var(--vscode-danger);">{javaErr}</div>
-          {/if}
-        </div>
-      </div>
-      <div class="panel__footer">
-        <button class="secondary-button" onclick={() => (showJavaModal = false)}>取消</button>
-        <button class="primary-button" onclick={saveJavaSelection} disabled={javaSaving}>
-          {javaSaving ? "保存中..." : "保存"}
-        </button>
       </div>
     </div>
   </div>

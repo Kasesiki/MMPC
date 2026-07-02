@@ -1,12 +1,22 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { goto } from "$app/navigation";
+  import { page } from "$app/state";
   import { invoke } from "@tauri-apps/api/core";
-  import type { JavaRuntime } from "$lib/types";
+  import type { JavaRuntime, PackConfig, Workspace } from "$lib/types";
 
   let list = $state<JavaRuntime[]>([]);
   let loading = $state(true);
   let adding = $state(false);
   let deletingId = $state<string | null>(null);
+  let workspaceId = $state("");
+  let workspaceName = $state("");
+  let workspaceConfig = $state<PackConfig | null>(null);
+  let workspaceLoading = $state(true);
+  let workspaceSaving = $state(false);
+  let workspaceErr = $state("");
+  let workspaceSuccess = $state("");
+  let selectedJavaId = $state("");
 
   let showAdd = $state(false);
   let formName = $state("");
@@ -25,8 +35,38 @@
     }
   }
 
+  async function loadWorkspaceTarget(id: string) {
+    workspaceLoading = true;
+    workspaceErr = "";
+    workspaceSuccess = "";
+
+    try {
+      const [cfg, workspaces] = await Promise.all([
+        invoke<PackConfig>("get_pack_config", { id }),
+        invoke<Workspace[]>("list_workspaces"),
+      ]);
+      workspaceConfig = cfg;
+      workspaceName = workspaces.find((item) => item.id === id)?.name ?? id;
+      selectedJavaId = cfg.java_runtime_id ?? "";
+    } catch (e: any) {
+      workspaceErr = String(e);
+      workspaceConfig = null;
+      workspaceName = "";
+      selectedJavaId = "";
+    } finally {
+      workspaceLoading = false;
+    }
+  }
+
   onMount(() => {
-    loadList();
+    workspaceId = page.url.searchParams.get("workspaceId")?.trim() ?? "";
+    if (!workspaceId) {
+      goto("/");
+      return;
+    }
+
+    void loadList();
+    void loadWorkspaceTarget(workspaceId);
   });
 
   async function handleDetect() {
@@ -73,10 +113,48 @@
     deletingId = id;
     try {
       await invoke("delete_java_runtime", { id });
+      if (selectedJavaId === id) {
+        selectedJavaId = "";
+      }
       await loadList();
     } finally {
       deletingId = null;
     }
+  }
+
+  async function handleSaveWorkspaceJava() {
+    if (!workspaceId || !workspaceConfig || workspaceSaving) return;
+    workspaceSaving = true;
+    workspaceErr = "";
+    workspaceSuccess = "";
+    try {
+      const nextConfig: PackConfig = {
+        ...workspaceConfig,
+        java_runtime_id: selectedJavaId || null,
+      };
+      await invoke("save_pack_config", { id: workspaceId, config: nextConfig });
+      workspaceConfig = nextConfig;
+      workspaceSuccess = "工作区 Java 运行时已更新";
+    } catch (e: any) {
+      workspaceErr = String(e);
+    } finally {
+      workspaceSaving = false;
+    }
+  }
+
+  function closePanel() {
+    if (!workspaceId) {
+      goto("/");
+      return;
+    }
+    goto(`/workspace/${workspaceId}`);
+  }
+
+  function currentWorkspaceJavaLabel() {
+    if (!selectedJavaId) return "默认（系统 Java）";
+    const found = list.find((item) => item.id === selectedJavaId);
+    if (!found) return "已删除的 Java 运行时";
+    return found.major_version ? `${found.name} (Java ${found.major_version})` : `${found.name} (${found.version_text})`;
   }
 
   function fmt(iso: string) {
@@ -89,97 +167,288 @@
   }
 </script>
 
-<div class="min-h-screen p-6">
-  <div class="flex items-center justify-between mb-8">
-    <div>
-      <h1 class="text-3xl font-bold">Java 管理</h1>
-      <p class="text-base-content/60 text-sm mt-1">管理可用于启动工作区的 Java 运行时</p>
+<div
+  class="overlay"
+  role="button"
+  tabindex="0"
+  aria-label="关闭 Java 管理"
+  onclick={closePanel}
+  onkeydown={(e) => (e.key === "Enter" || e.key === "Escape") && closePanel()}
+>
+  <div
+    class="panel java-panel"
+    role="dialog"
+    aria-modal="true"
+    tabindex="-1"
+    onclick={(e) => e.stopPropagation()}
+    onkeydown={(e) => e.stopPropagation()}
+  >
+    <div class="panel__header">
+      <div>
+        <h2 class="panel__title">Java 管理</h2>
+        <div class="panel__subtitle">
+          {workspaceName ? `为 ${workspaceName} 选择启动 Java，并管理本地 Java 运行时` : "加载工作区 Java 配置中"}
+        </div>
+      </div>
+      <button class="icon-button" onclick={closePanel} aria-label="关闭">×</button>
     </div>
-    <button class="btn btn-primary" onclick={() => (showAdd = true)}>+ 添加 Java</button>
-  </div>
 
-  {#if loading}
-    <div class="flex justify-center py-24"><span class="loading loading-spinner loading-lg"></span></div>
-  {:else if list.length === 0}
-    <div class="flex flex-col items-center py-24 text-base-content/40">
-      <p class="text-lg">还没有 Java 配置</p>
-      <p class="text-sm mt-1">点击上方按钮添加 Java 路径</p>
+    <div class="panel__body java-panel__body">
+      <section class="java-panel__section">
+        <div class="java-panel__section-header">
+          <div>
+            <div class="panel-heading">Workspace Java</div>
+            <div class="inline-message">为当前工作区选择启动时使用的 Java 版本。</div>
+          </div>
+          <div class="java-panel__current">{currentWorkspaceJavaLabel()}</div>
+        </div>
+
+        {#if workspaceLoading}
+          <div class="empty-state">正在加载工作区配置...</div>
+        {:else}
+          <div class="field">
+            <label for="workspace-java-select">Java Runtime</label>
+            <select id="workspace-java-select" bind:value={selectedJavaId} disabled={loading || list.length === 0}>
+              <option value="">默认（系统 Java）</option>
+              {#each list as j}
+                <option value={j.id}>{j.name} - {j.major_version ? `Java ${j.major_version}` : j.version_text}</option>
+              {/each}
+            </select>
+          </div>
+        {/if}
+
+        {#if workspaceErr}
+          <div class="inline-message" style="color: var(--vscode-danger);">{workspaceErr}</div>
+        {/if}
+        {#if workspaceSuccess}
+          <div class="inline-message" style="color: var(--vscode-success);">{workspaceSuccess}</div>
+        {/if}
+      </section>
+
+      <section class="java-panel__section">
+        <div class="java-panel__section-header">
+          <div>
+            <div class="panel-heading">Installed Runtimes</div>
+            <div class="inline-message">添加、查看和删除当前可用的 Java 运行时。</div>
+          </div>
+          <button class="primary-button" onclick={() => (showAdd = true)}>添加 Java</button>
+        </div>
+
+        {#if loading}
+          <div class="empty-state">正在加载 Java 列表...</div>
+        {:else if list.length === 0}
+          <div class="empty-state">还没有 Java 配置，先添加一个运行时吧。</div>
+        {:else}
+          <div class="java-runtime-list">
+            {#each list as j}
+              <div
+                class:java-runtime-card={true}
+                class:java-runtime-card--active={selectedJavaId === j.id}
+                role="button"
+                tabindex="0"
+                onclick={() => (selectedJavaId = j.id)}
+                onkeydown={(e) => (e.key === "Enter" || e.key === " ") && (selectedJavaId = j.id)}
+              >
+                <div class="java-runtime-card__main">
+                  <div class="java-runtime-card__title">
+                    <span>{j.name}</span>
+                    <span class="java-runtime-card__badge">
+                      {j.major_version ? `Java ${j.major_version}` : "未知版本"}
+                    </span>
+                  </div>
+                  <div class="java-runtime-card__meta">{j.version_text}</div>
+                  <div class="java-runtime-card__path">{j.path}</div>
+                </div>
+                <div class="java-runtime-card__actions">
+                  <div class="java-runtime-card__date">{fmt(j.created_at)}</div>
+                  <button
+                    class="secondary-button"
+                    type="button"
+                    disabled={deletingId === j.id}
+                    onclick={(e) => {
+                      e.stopPropagation();
+                      void handleDelete(j.id);
+                    }}
+                  >
+                    {deletingId === j.id ? "删除中..." : "删除"}
+                  </button>
+                </div>
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </section>
     </div>
-  {:else}
-    <div class="overflow-x-auto">
-      <table class="table table-zebra">
-        <thead>
-          <tr>
-            <th>名称</th>
-            <th>版本</th>
-            <th class="max-md:hidden">路径</th>
-            <th>添加时间</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {#each list as j}
-            <tr>
-              <td class="font-medium">{j.name}</td>
-              <td>
-                <span class="badge badge-outline">
-                  {j.major_version ? `Java ${j.major_version}` : "未知版本"}
-                </span>
-                <div class="text-xs text-base-content/60 mt-1">{j.version_text}</div>
-              </td>
-              <td class="text-sm text-base-content/60 max-md:hidden max-w-lg truncate">{j.path}</td>
-              <td class="text-sm text-base-content/50">{fmt(j.created_at)}</td>
-              <td>
-                <button
-                  class="btn btn-ghost btn-xs text-error"
-                  disabled={deletingId === j.id}
-                  onclick={() => handleDelete(j.id)}
-                >
-                  {deletingId === j.id ? "删除中..." : "删除"}
-                </button>
-              </td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
+
+    <div class="panel__footer">
+      <button class="secondary-button" onclick={closePanel}>关闭</button>
+      <button class="primary-button" onclick={handleSaveWorkspaceJava} disabled={workspaceSaving || workspaceLoading}>
+        {workspaceSaving ? "保存中..." : "保存工作区设置"}
+      </button>
     </div>
-  {/if}
+  </div>
 </div>
 
 {#if showAdd}
-  <div class="modal modal-open">
-    <div class="modal-box">
-      <h3 class="font-bold text-lg mb-4">添加 Java 运行时</h3>
-      <div class="form-control gap-4">
+  <div class="overlay">
+    <div class="panel panel--narrow" role="dialog" aria-modal="true">
+      <div class="panel__header">
         <div>
-          <label class="label" for="j-path"><span class="label-text">Java 可执行文件路径</span></label>
-          <div class="join w-full">
-            <input id="j-path" class="input input-bordered join-item w-full" bind:value={formPath} placeholder="/path/to/java 或 java.exe" />
-            <button class="btn join-item" onclick={handleDetect} disabled={detecting || !formPath.trim()}>
-              {detecting ? "检测中..." : "检测"}
-            </button>
-          </div>
+          <h3 class="panel__title">添加 Java 运行时</h3>
+          <div class="panel__subtitle">录入一个可执行的 Java 路径，用于当前工作区选择。</div>
         </div>
-        <div>
-          <label class="label" for="j-name"><span class="label-text">显示名称</span></label>
-          <input id="j-name" class="input input-bordered w-full" bind:value={formName} placeholder="例如：Temurin 21" />
-        </div>
-        {#if formVersion}
-          <div class="alert alert-info text-sm">
-            <span>检测结果：{formVersion}{formMajor ? `（Java ${formMajor}）` : ""}</span>
-          </div>
-        {/if}
-        {#if formErr}
-          <div class="alert alert-error text-sm"><span>{formErr}</span></div>
-        {/if}
+        <button class="icon-button" onclick={() => (showAdd = false)} aria-label="关闭">×</button>
       </div>
-      <div class="modal-action">
-        <button class="btn btn-ghost" onclick={() => (showAdd = false)}>取消</button>
-        <button class="btn btn-primary" onclick={handleAdd} disabled={adding || !formName.trim() || !formPath.trim()}>
+
+      <div class="panel__body">
+        <div class="field-grid">
+          <div class="field">
+            <label for="j-path">Java 可执行文件路径</label>
+            <div class="button-row">
+              <input id="j-path" bind:value={formPath} placeholder="/path/to/java 或 java.exe" />
+              <button class="secondary-button" onclick={handleDetect} disabled={detecting || !formPath.trim()}>
+                {detecting ? "检测中..." : "检测"}
+              </button>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="j-name">显示名称</label>
+            <input id="j-name" bind:value={formName} placeholder="例如：Temurin 21" />
+          </div>
+
+          {#if formVersion}
+            <div class="inline-message">检测结果：{formVersion}{formMajor ? `（Java ${formMajor}）` : ""}</div>
+          {/if}
+          {#if formErr}
+            <div class="inline-message" style="color: var(--vscode-danger);">{formErr}</div>
+          {/if}
+        </div>
+      </div>
+
+      <div class="panel__footer">
+        <button class="secondary-button" onclick={() => (showAdd = false)}>取消</button>
+        <button class="primary-button" onclick={handleAdd} disabled={adding || !formName.trim() || !formPath.trim()}>
           {adding ? "保存中..." : "保存"}
         </button>
       </div>
     </div>
-    <div class="modal-backdrop" role="button" tabindex="0" onclick={() => (showAdd = false)} onkeydown={(e) => e.key === "Enter" && (showAdd = false)}></div>
   </div>
 {/if}
+
+<style>
+  .java-panel {
+    width: min(980px, 100%);
+  }
+
+  .java-panel__body {
+    display: grid;
+    gap: 18px;
+  }
+
+  .java-panel__section {
+    display: grid;
+    gap: 14px;
+    padding: 16px;
+    border: 1px solid var(--vscode-border);
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  .java-panel__section-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+  }
+
+  .java-panel__current {
+    color: var(--vscode-text-muted);
+    font-size: 13px;
+    text-align: right;
+    max-width: 280px;
+  }
+
+  .java-runtime-list {
+    display: grid;
+    gap: 10px;
+    max-height: 360px;
+    overflow: auto;
+  }
+
+  .java-runtime-card {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    width: 100%;
+    padding: 14px 16px;
+    border: 1px solid var(--vscode-border-strong);
+    background: var(--vscode-bg-panel);
+    color: var(--vscode-text);
+    text-align: left;
+    transition: border-color 140ms ease, background 140ms ease;
+  }
+
+  .java-runtime-card:hover {
+    border-color: var(--vscode-accent);
+    background: var(--vscode-bg-hover);
+  }
+
+  .java-runtime-card--active {
+    border-color: var(--vscode-accent);
+    background: var(--vscode-accent-soft);
+  }
+
+  .java-runtime-card__main {
+    display: grid;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .java-runtime-card__title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    font-weight: 600;
+  }
+
+  .java-runtime-card__badge {
+    color: var(--vscode-warning);
+    font-size: 12px;
+  }
+
+  .java-runtime-card__meta,
+  .java-runtime-card__date {
+    color: var(--vscode-text-muted);
+    font-size: 12px;
+  }
+
+  .java-runtime-card__path {
+    color: var(--vscode-text-muted);
+    font-size: 12px;
+    word-break: break-all;
+  }
+
+  .java-runtime-card__actions {
+    display: grid;
+    gap: 10px;
+    justify-items: end;
+    flex-shrink: 0;
+  }
+
+  @media (max-width: 720px) {
+    .java-panel__section-header,
+    .java-runtime-card {
+      grid-template-columns: 1fr;
+      display: grid;
+    }
+
+    .java-panel__current,
+    .java-runtime-card__actions {
+      text-align: left;
+      justify-items: start;
+      max-width: none;
+    }
+  }
+</style>
