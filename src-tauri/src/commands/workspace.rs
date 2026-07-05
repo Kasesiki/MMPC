@@ -2,7 +2,6 @@
 
 use anyhow::anyhow;
 use anyhow::{Context, Result as AnyResult, bail};
-use bmclapi::bmclapi;
 use chrono::Utc;
 use mc_launcher_core::runtime::prepare::versions_dir;
 use serde::{Deserialize, Serialize};

@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 
-use bmclapi::bmclapi;
 use mc_launcher_core::runtime::LoaderKind;
 use serde::{Deserialize, Serialize};
 use tauri::Emitter;
