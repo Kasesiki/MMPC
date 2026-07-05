@@ -29,6 +29,8 @@
   let loadingLoaderVersions = $state(false);
 
   onMount(async () => {
+    await loadWorkspaces();
+    loading = false;
     const versions = await listReleaseVersions();
     if (versions.length > 0) {
       releaseVersions = versions;
@@ -36,8 +38,6 @@
         newMcVersion = versions[0];
       }
     }
-    await loadWorkspaces();
-    loading = false;
   });
 
   $effect(() => {

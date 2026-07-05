@@ -285,12 +285,12 @@ pub async fn prepare_launch(
     };
 
     let u = OfflineUser::new(player_name);
-    let built = OfflineLauncher.build_command(&lc, &u).map_err(|e| e.to_string())?;
+    let arg = OfflineLauncher.build_arg(&lc, &u).map_err(|e| e.to_string())?;
 
     Ok(PreparedLaunch {
         workspace_dir: ws,
-        program: built.0.get_program().to_string_lossy().to_string(),
-        argfile_path: built.1,
+        program: lc.java_path.to_string_lossy().to_string(),
+        argfile_path: arg,
     })
 }
 

@@ -613,59 +613,47 @@
           {/if}
 
           <div class="overview-list-scroll">
-            {#if overviewLoading && installedMods.length === 0}
-              <div class="editor-empty">
-                <h2>Loading Mods</h2>
-                <p>正在读取当前工作区已安装的模组。</p>
-              </div>
-            {:else if installedMods.length === 0}
-              <div class="editor-empty">
-                <h2>No Installed Mods</h2>
-                <p>当前工作区还没有安装模组，可以切换到 Mod 页面进行添加。</p>
-              </div>
-            {:else}
-              <div class="overview-mod-list">
-                {#each installedMods as mod}
-                  <article class="overview-mod-card">
-                    <div class="overview-mod-card__main">
-                      <div class="overview-mod-card__title-row">
-                        <div class="overview-mod-card__title">{mod.title}</div>
-                        <div class={`overview-mod-card__status ${mod.enabled ? "is-enabled" : "is-disabled"}`}>
-                          {mod.enabled ? "已启用" : "已禁用"}
-                        </div>
+            <div class="overview-mod-list">
+              {#each installedMods as mod}
+                <article class="overview-mod-card">
+                  <div class="overview-mod-card__main">
+                    <div class="overview-mod-card__title-row">
+                      <div class="overview-mod-card__title">{mod.title}</div>
+                      <div class={`overview-mod-card__status ${mod.enabled ? "is-enabled" : "is-disabled"}`}>
+                        {mod.enabled ? "已启用" : "已禁用"}
                       </div>
-                      <div class="overview-mod-card__meta">
-                        <span>版本 {mod.mod_version}</span>
-                        <span>{mod.mod_name}</span>
-                      </div>
-                      <label class="overview-mod-card__field">
-                        <span>类型</span>
-                        <select
-                          class="select select-bordered select-sm overview-mod-card__select"
-                          value={mod.mod_type}
-                          disabled={updatingTypeProjectId === mod.project_id}
-                          onchange={(e) => updateModType(mod, (e.currentTarget as HTMLSelectElement).value as ModUsageType)}
-                        >
-                          <option value="client_only">仅客户端</option>
-                          <option value="server_only">仅服务端</option>
-                          <option value="client_and_server">双端</option>
-                        </select>
-                      </label>
                     </div>
-                    <label class="overview-mod-card__toggle">
-                      <span>启用</span>
-                      <input
-                        type="checkbox"
-                        class="toggle toggle-primary"
-                        checked={mod.enabled}
-                        disabled={togglingProjectId === mod.project_id}
-                        onchange={(e) => toggleModEnabled(mod, (e.currentTarget as HTMLInputElement).checked)}
-                      />
+                    <div class="overview-mod-card__meta">
+                      <span>版本 {mod.mod_version}</span>
+                      <span>{mod.mod_name}</span>
+                    </div>
+                    <label class="overview-mod-card__field">
+                      <span>类型</span>
+                      <select
+                        class="select select-bordered select-sm overview-mod-card__select"
+                        value={mod.mod_type}
+                        disabled={updatingTypeProjectId === mod.project_id}
+                        onchange={(e) => updateModType(mod, (e.currentTarget as HTMLSelectElement).value as ModUsageType)}
+                      >
+                        <option value="client_only">仅客户端</option>
+                        <option value="server_only">仅服务端</option>
+                        <option value="client_and_server">双端</option>
+                      </select>
                     </label>
-                  </article>
-                {/each}
-              </div>
-            {/if}
+                  </div>
+                  <label class="overview-mod-card__toggle">
+                    <span>启用</span>
+                    <input
+                      type="checkbox"
+                      class="toggle toggle-primary"
+                      checked={mod.enabled}
+                      disabled={togglingProjectId === mod.project_id}
+                      onchange={(e) => toggleModEnabled(mod, (e.currentTarget as HTMLInputElement).checked)}
+                    />
+                  </label>
+                </article>
+              {/each}
+            </div>
           </div>
         </div>
       {:else if viewMode === "mods"}

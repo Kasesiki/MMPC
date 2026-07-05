@@ -110,16 +110,10 @@ impl LaunchConfig {
 pub struct OfflineLauncher;
 
 impl OfflineLauncher {
-    pub fn build_command(&self, config: &LaunchConfig, user: &OfflineUser) -> anyhow::Result<(Command, PathBuf)> {
+    pub fn build_arg(&self, config: &LaunchConfig, user: &OfflineUser) -> anyhow::Result<PathBuf> {
         let plan = config
             .build_plan(user)
             .expect("OfflineLauncher: invalid launch config");
-
-        let mut cmd = Command::new(&config.java_path);
-        cmd.arg(format!("-Xmx{}", config.max_mem));
-        if let Some(min) = &config.min_mem {
-            cmd.arg(format!("-Xms{}", min));
-        }
 
         let mut args = [plan.jvm_args, config.extra_jvm_args.clone(), vec![plan.main_class], plan.game_args, config.extra_game_args.clone()].concat();
 
@@ -133,8 +127,7 @@ impl OfflineLauncher {
         let argfile = config.game_dir.join("java.args");
         let content = args.join(" ");
         std::fs::write(&argfile, content).with_context(|| format!("写入 argfile 失败: {}", argfile.display()))?;
-        cmd.args(args);
-        Ok((cmd, argfile))
+        Ok(argfile)
     }
 }
 
