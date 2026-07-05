@@ -1,14 +1,14 @@
 //! Workspace CRUD — reads/writes `.MMPC/workspaces/<id>/pack.json`
 
-use std::fs;
-use std::path::PathBuf;
 use anyhow::anyhow;
-use anyhow::{bail, Context, Result as AnyResult};
+use anyhow::{Context, Result as AnyResult, bail};
 use bmclapi::bmclapi;
 use chrono::Utc;
 use mc_launcher_core::runtime::prepare::versions_dir;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::fs;
+use std::path::PathBuf;
 use tokio::sync::OnceCell;
 
 // ─── Data structures ───
@@ -539,7 +539,10 @@ fn mc_version_to_neoforge_prefix(mc_version: &str) -> Option<String> {
 async fn fetch_maven_metadata_versions(url: &str) -> anyhow::Result<Vec<String>> {
     let response = bmclapi::request(url).await?;
     let response = response.error_for_status()?;
-    let xml = response.text().await.map_err(|e| anyhow!("{}", e.to_string()))?;
+    let xml = response
+        .text()
+        .await
+        .map_err(|e| anyhow!("{}", e.to_string()))?;
     Ok(parse_maven_versions(&xml))
 }
 

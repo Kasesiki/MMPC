@@ -78,7 +78,7 @@
       void loadInstalledMods(id);
     }).catch(() => {});
 
-    invoke<AppSettings>("get_settings").then((settings) => {
+    invoke<AppSettings>("load_settings").then((settings) => {
       applyTheme(settings.theme);
     }).catch(() => {
       applyTheme("dark");
@@ -336,7 +336,7 @@
     if (savingTheme) return;
     savingTheme = true;
     try {
-      const settings = await invoke<AppSettings>("get_settings");
+      const settings = await invoke<AppSettings>("load_settings");
       const saved = await invoke<AppSettings>("save_settings", {
         settings: {
           ...settings,

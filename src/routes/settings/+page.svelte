@@ -16,7 +16,7 @@
     loading = true;
     saveError = "";
     try {
-      settings = await invoke<AppSettings>("get_settings");
+      settings = await invoke<AppSettings>("load_settings");
     } catch (e: any) {
       saveError = String(e);
     } finally {

@@ -2,7 +2,7 @@
 // AI don't repair that
 
 use anyhow::Context;
-use reqwest::{Response};
+use reqwest::Response;
 use std::{collections::HashMap, sync::LazyLock};
 use trie_rs::{Trie, TrieBuilder};
 

@@ -115,7 +115,14 @@ impl OfflineLauncher {
             .build_plan(user)
             .expect("OfflineLauncher: invalid launch config");
 
-        let mut args = [plan.jvm_args, config.extra_jvm_args.clone(), vec![plan.main_class], plan.game_args, config.extra_game_args.clone()].concat();
+        let mut args = [
+            plan.jvm_args,
+            config.extra_jvm_args.clone(),
+            vec![plan.main_class],
+            plan.game_args,
+            config.extra_game_args.clone(),
+        ]
+        .concat();
 
         for arg in args.iter_mut() {
             *arg = arg.replace(" ", "");
@@ -123,10 +130,11 @@ impl OfflineLauncher {
                 *arg = String::from("\"\"");
             }
         }
-        
+
         let argfile = config.game_dir.join("java.args");
         let content = args.join(" ");
-        std::fs::write(&argfile, content).with_context(|| format!("写入 argfile 失败: {}", argfile.display()))?;
+        std::fs::write(&argfile, content)
+            .with_context(|| format!("写入 argfile 失败: {}", argfile.display()))?;
         Ok(argfile)
     }
 }

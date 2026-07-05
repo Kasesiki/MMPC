@@ -1,19 +1,16 @@
-use crate::commands::download::{read_pack_config, TauriProgressReporter};
+use crate::commands::download::{TauriProgressReporter, read_pack_config};
+use crate::commands::mods::sync_workspace_mod_links;
 
 use super::download::ensure_workspace_runtime;
 use super::java::resolve_launch_java_path;
-use super::mods::sync_workspace_mods;
 use anyhow::{Context, Result};
 use mc_launcher_core::auth::offline::OfflineUser;
 use mc_launcher_core::launch::offline::{LaunchConfig, OfflineLauncher};
 use mc_launcher_core::launch::version::{
-    Library,
-    default_logging_config_path,
-    evaluate_rules,
-    parse_version_metadata,
+    Library, default_logging_config_path, evaluate_rules, parse_version_metadata,
 };
-use mc_launcher_core::runtime::prepare::{mm, wd};
 use mc_launcher_core::runtime::ProgressReporter;
+use mc_launcher_core::runtime::prepare::{mm, wd};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use tauri::Emitter;
@@ -52,17 +49,13 @@ fn native_classifier_for_current_os() -> String {
     }
 }
 
-fn collect_libraries_from_metadata(
-    library_dir: &Path,
-    libraries: &[Library],
-) -> Vec<PathBuf> {
+fn collect_libraries_from_metadata(library_dir: &Path, libraries: &[Library]) -> Vec<PathBuf> {
     let current_os = mc_launcher_core::launch::version::detect_os_name();
     let current_arch = std::env::consts::ARCH;
     let feature_flags = std::collections::HashMap::new();
     let mut jars = Vec::new();
 
     for lib in libraries {
-        
         if !evaluate_rules(&lib.rules, current_os, current_arch, &feature_flags) {
             continue;
         }
@@ -79,9 +72,17 @@ fn collect_libraries_from_metadata(
             }
         } else {
             if let Some((a, b)) = lib.name.split_once(":") {
-                jars.push(library_dir.join(PathBuf::from_str(&format!("{}/{}/*", a.replace(".", "/"), b.replace(":", "/"))).unwrap()));
+                jars.push(
+                    library_dir.join(
+                        PathBuf::from_str(&format!(
+                            "{}/{}/*",
+                            a.replace(".", "/"),
+                            b.replace(":", "/")
+                        ))
+                        .unwrap(),
+                    ),
+                );
             }
-        
         }
     }
 
@@ -110,7 +111,11 @@ fn collect_native_libraries_from_metadata(
             .unwrap_or_else(|| fallback_classifier.clone())
             .replace(
                 "${arch}",
-                if cfg!(target_pointer_width = "64") { "64" } else { "32" },
+                if cfg!(target_pointer_width = "64") {
+                    "64"
+                } else {
+                    "32"
+                },
             );
 
         if let Some(rel_path) = lib
@@ -185,8 +190,6 @@ fn prepare_natives_dir(ws: &Path, libraries: &[PathBuf]) -> Result<()> {
     Ok(())
 }
 
-/// 启动用
-#[tauri::command]
 pub async fn prepare_launch(
     app: &tauri::AppHandle,
     workspace_id: &str,
@@ -194,38 +197,32 @@ pub async fn prepare_launch(
 ) -> Result<PreparedLaunch, String> {
     let reporter = TauriProgressReporter::new(app.clone());
 
-    let ws = wd(workspace_id);
-    // 同步mod
-    reporter.send("同步mod中....");
-    sync_workspace_mods(workspace_id.to_string())?;
     let mut pack = read_pack_config(workspace_id).map_err(|e| e.to_string())?;
 
-    // 下载部分全于该部分进行
-    let runtime_result: mc_launcher_core::runtime::RuntimeResult =
-        ensure_workspace_runtime(&reporter, workspace_id, &pack)
-            .await
-            .map_err(|e| e.to_string())?;
-    
-    reporter.send("环境准备完毕——");        
-    let library_dir = shared_libraries_dir();
+    sync_workspace_mod_links(workspace_id, &pack.mods).map_err(|e| e.to_string())?;
+
+    let runtime_result = ensure_workspace_runtime(&reporter, workspace_id, &pack)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    reporter.send("环境准备完毕——");
 
     let child_raw = std::fs::read_to_string(&runtime_result.version_json_path)
         .map_err(|e| format!("读取 version.json 失败: {e}"))?;
-    let child_version_metadata = parse_version_metadata(&child_raw)
-        .map_err(|e| format!("解析启动元数据失败: {e}"))?;
-    // let child_version_metadata: mc_launcher_core::launch::version::VersionMetadata = load_effective_version_metadata(
-    //     &runtime_result.version_json_path,
-    //     runtime_result.inherited_version_json_path.as_deref(),
-    // )?;
+    let child_version_metadata =
+        parse_version_metadata(&child_raw).map_err(|e| format!("解析启动元数据失败: {e}"))?;
 
-    
-    // 此为lib
-    let libraries = collect_libraries_from_metadata(&library_dir, &child_version_metadata.libraries);
+    let library_dir = shared_libraries_dir();
+    let libraries =
+        collect_libraries_from_metadata(&library_dir, &child_version_metadata.libraries);
     if libraries.is_empty() {
         return Err("未检测到 libraries 依赖，请先下载 MC 版本".into());
     }
 
-    let native_libraries = collect_native_libraries_from_metadata(&library_dir, &child_version_metadata.libraries);
+    let ws = wd(workspace_id);
+
+    let native_libraries =
+        collect_native_libraries_from_metadata(&library_dir, &child_version_metadata.libraries);
     prepare_natives_dir(&ws, &native_libraries).map_err(|e| e.to_string())?;
 
     // Collect JVM args
@@ -249,9 +246,11 @@ pub async fn prepare_launch(
 
     let java_path = resolve_launch_java_path(pack.java_runtime_id.as_deref())?;
 
-    let asset_index_id = child_version_metadata.asset_index.as_ref()
-    .map(|index| index.id.clone())
-    .unwrap_or(pack.mc_version);
+    let asset_index_id = child_version_metadata
+        .asset_index
+        .as_ref()
+        .map(|index| index.id.clone())
+        .unwrap_or(pack.mc_version);
 
     let assets_dir = mm().join("assets");
 
@@ -285,7 +284,9 @@ pub async fn prepare_launch(
     };
 
     let u = OfflineUser::new(player_name);
-    let arg = OfflineLauncher.build_arg(&lc, &u).map_err(|e| e.to_string())?;
+    let arg = OfflineLauncher
+        .build_arg(&lc, &u)
+        .map_err(|e| e.to_string())?;
 
     Ok(PreparedLaunch {
         workspace_dir: ws,

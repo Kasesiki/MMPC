@@ -47,6 +47,7 @@ fn normalize_theme(theme: &str) -> String {
     }
 }
 
+#[tauri::command]
 pub fn load_settings() -> Result<AppSettings, String> {
     let path = settings_path();
     if !path.exists() {
@@ -71,13 +72,6 @@ fn persist_settings(settings: &AppSettings) -> Result<(), String> {
         serde_json::to_string_pretty(settings).map_err(|e| format!("序列化设置失败: {e}"))?;
     std::fs::write(path, content).map_err(|e| format!("写入 settings.json 失败: {e}"))?;
     Ok(())
-}
-
-#[tauri::command]
-pub fn get_settings() -> Result<AppSettings, String> {
-    let settings = load_settings()?;
-    persist_settings(&settings)?;
-    Ok(settings)
 }
 
 #[tauri::command]

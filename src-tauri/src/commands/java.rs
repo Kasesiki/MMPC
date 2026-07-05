@@ -70,11 +70,7 @@ fn detect_java_version(path: &str) -> Result<DetectJavaResult, String> {
 }
 
 fn java_executable_name() -> &'static str {
-    if cfg!(windows) {
-        "java.exe"
-    } else {
-        "java"
-    }
+    if cfg!(windows) { "java.exe" } else { "java" }
 }
 
 fn is_valid_java_binary(path: &str) -> bool {

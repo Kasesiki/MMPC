@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, Context, Result as AnyResult};
+use anyhow::{Context, Result as AnyResult, anyhow};
 use mc_launcher_core::runtime::prepare::{mm, wd};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -244,7 +244,7 @@ fn ensure_symlink(src: &Path, dest: &Path) -> AnyResult<()> {
 }
 
 /// Pass 8/10, 验证，清理，连接工作区的mods，保证工作区的mods与传入参数对齐
-fn sync_workspace_mod_links(workspace_id: &str, mods: &[WorkspaceMod]) -> AnyResult<()> {
+pub fn sync_workspace_mod_links(workspace_id: &str, mods: &[WorkspaceMod]) -> AnyResult<()> {
     let mods_dir = workspace_mods_dir(workspace_id);
 
     std::fs::create_dir_all(&mods_dir)
@@ -469,7 +469,11 @@ pub async fn search_modrinth_mods(
         )
     };
     let base = format!("https://api.modrinth.com/v2/search?limit=20&facets={facets}");
-    let url = match query.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+    let url = match query
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         Some(query) => format!(
             "{base}&query={}&index=relevance",
             urlencoding::encode(query)
@@ -631,11 +635,6 @@ pub fn remove_workspace_mod(workspace_id: String, project_id: String) -> Result<
     pack.mods.retain(|item| item.project_id != project_id);
     sync_workspace_mod_links(&workspace_id, &pack.mods).map_err(|e| e.to_string())?;
     write_pack_config(&workspace_id, &pack).map_err(|e| e.to_string())
-}
-
-pub fn sync_workspace_mods(workspace_id: String) -> Result<(), String> {
-    let pack: PackConfig = read_pack_config(&workspace_id).map_err(|e| e.to_string())?;
-    sync_workspace_mod_links(&workspace_id, &pack.mods).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

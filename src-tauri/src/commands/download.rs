@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use mc_launcher_core::runtime::RuntimeResult;
 use mc_launcher_core::runtime::{
-    prepare::prepare_runtime, LoaderKind, ProgressReporter, RuntimeRequest,
+    LoaderKind, ProgressReporter, RuntimeRequest, prepare::prepare_runtime,
 };
 use tauri::Emitter;
 

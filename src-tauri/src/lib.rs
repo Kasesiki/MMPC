@@ -35,7 +35,7 @@ pub fn run() {
             java::detect_java_runtime,
             java::add_java_runtime,
             java::delete_java_runtime,
-            settings::get_settings,
+            settings::load_settings,
             settings::save_settings,
         ])
         .run(tauri::generate_context!())

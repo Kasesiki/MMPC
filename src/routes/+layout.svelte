@@ -12,7 +12,7 @@
 
   onMount(async () => {
     try {
-      const settings = await invoke<AppSettings>("get_settings");
+      const settings = await invoke<AppSettings>("load_settings");
       applyTheme(settings.theme);
     } catch {
       applyTheme("dark");

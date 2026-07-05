@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha1::{Digest, Sha1};
 use tokio::fs::{self, File};
-use tokio::io::{AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 use zip::ZipArchive;
 
@@ -246,10 +246,9 @@ pub async fn prepare_runtime(
         .await?;
 
     let base_version_json: VersionJson =
-        serde_json::from_value(base_value.clone()   ).context("解析基础 version.json 失败")?;
+        serde_json::from_value(base_value.clone()).context("解析基础 version.json 失败")?;
 
     let client_path = layout.versions_dir.join("client.jar");
-
 
     // download_version_json根源相同, download_version_json通过格式到VersionJson从而会丢失部分信息
     reporter.send("正在请求loader信息....");
