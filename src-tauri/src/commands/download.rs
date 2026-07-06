@@ -1,12 +1,12 @@
-use futures_util::FutureExt as _;
 use std::path::PathBuf;
 use tokio::fs;
 
 use anyhow::anyhow;
 use anyhow::{Context, Result};
-use futures_util::TryFutureExt;
 use mc_launcher_core::runtime::prepare::{
-    AssetIndexObjects, DownloadTask, DownloadTrait, MOJANG_RESOURCES_BASE, VersionJson, build_library_tasks, build_runtime_layout, check_path_sha1, execute_download_pool, fetch_fabric_version_value, file_matches_sha1, merge_version_json, write_json_pretty,
+    AssetIndexObjects, DownloadTask, DownloadTrait, MOJANG_RESOURCES_BASE, VersionJson,
+    build_library_tasks, build_runtime_layout, check_path_sha1, execute_download_pool,
+    fetch_fabric_version_value, file_matches_sha1, merge_version_json, write_json_pretty,
 };
 use mc_launcher_core::runtime::{LoaderKind, ProgressReporter};
 use mc_launcher_core::runtime::{RuntimeLayout, RuntimeResult};
@@ -15,7 +15,6 @@ use tauri::Emitter;
 
 use crate::commands::workspace::VersionManifest;
 
-use super::java::resolve_launch_java_path;
 use super::settings::load_settings;
 use super::workspace::PackConfig;
 
@@ -106,10 +105,6 @@ pub fn read_pack_config(id: &str) -> Result<PackConfig> {
     serde_json::from_str(&content).context("解析 pack.json 失败")
 }
 
-fn resolve_workspace_java_path(pack: &PackConfig) -> Result<String> {
-    resolve_launch_java_path(pack.java_runtime_id.as_deref()).map_err(anyhow::Error::msg)
-}
-
 pub async fn ensure_workspace_runtime(
     reporter: &TauriProgressReporter,
     workspace_id: &str,
@@ -153,17 +148,17 @@ pub async fn ensure_workspace_runtime(
     let base_value: Value = if let Ok(result) = fs::read_to_string(&inherited_version_json_path)
         .await
         .map_err(|e| anyhow!("{e}"))
-        .and_then(|content: String| serde_json::from_str(&content).map_err(|e| anyhow!("{e}"))) {
-            result
-        } else {
-            fetch_vanilla_version_value(&pack.mc_version)
-                .await
-                .map(|result| {
-                    let _ = write_json_pretty(&inherited_version_json_path, &result);
-                    result
-                })?
-        };
-
+        .and_then(|content: String| serde_json::from_str(&content).map_err(|e| anyhow!("{e}")))
+    {
+        result
+    } else {
+        fetch_vanilla_version_value(&pack.mc_version)
+            .await
+            .map(|result| {
+                let _ = write_json_pretty(&inherited_version_json_path, &result);
+                result
+            })?
+    };
 
     let base_version_json: VersionJson =
         serde_json::from_value(base_value.clone()).context("解析基础 version.json 失败")?;
@@ -200,19 +195,24 @@ pub async fn ensure_workspace_runtime(
 
     let version_json_path = layout.versions_dir.join("version.json");
     write_json_pretty(&version_json_path, &launcher_version_json)?;
-    
 
     // 下载client.jar, 存到工作区的versions文件夹
     reporter.send("下载client.jar...");
-    download_version_json.downloads.client.download(&client_path).await;
+    download_version_json
+        .downloads
+        .client
+        .download(&client_path)
+        .await?;
 
     let asset_index_path = layout.versions_dir.join("asset_index.json");
     reporter.send("下载asset_index.json...");
-    download_version_json.asset_index.download(&asset_index_path);
+    download_version_json
+        .asset_index
+        .download(&asset_index_path)
+        .await?;
 
     // 下载 library，存到全局共享的 .MMPC/libraries 文件夹
-    let library_tasks =
-        build_library_tasks(&layout.libraries_dir, &download_version_json)?;
+    let library_tasks = build_library_tasks(&layout.libraries_dir, &download_version_json)?;
     execute_download_pool(
         reporter,
         "下载 libraries",

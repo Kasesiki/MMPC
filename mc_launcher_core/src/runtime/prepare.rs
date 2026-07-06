@@ -6,12 +6,12 @@ use anyhow::{Context, Result, anyhow, bail};
 use futures_util::{StreamExt, stream};
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
-use tokio::fs::{File};
+use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 use zip::ZipArchive;
 
-use super::{LoaderKind, ProgressReporter, RuntimeLayout, RuntimeRequest, RuntimeResult};
+use super::{LoaderKind, ProgressReporter, RuntimeLayout, RuntimeRequest};
 
 pub const MOJANG_MANIFEST_URL: &str =
     "https://launchermeta.mojang.com/mc/game/version_manifest_v2.json";
@@ -37,7 +37,10 @@ pub trait DownloadTrait {
     fn url(&self) -> &str;
     fn dest(&self) -> Option<&str>;
     fn sha1(&self) -> &str;
-    fn download<T: Into<PathBuf> + Send>(&self, fallback_dest: T) -> impl std::future::Future<Output = Result<()>> + Send
+    fn download<T: Into<PathBuf> + Send>(
+        &self,
+        fallback_dest: T,
+    ) -> impl std::future::Future<Output = Result<()>> + Send
     where
         Self: Sync,
     {
