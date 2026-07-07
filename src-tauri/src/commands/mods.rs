@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result as AnyResult, anyhow};
-use mc_launcher_core::runtime::prepare::{mm, wd};
+use mc_launcher_core::runtime::{GLOBAL_MODCACHE, MMPCDIR, prepare::wd};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -132,10 +132,6 @@ fn pack_json_path(id: &str) -> PathBuf {
     wd(id).join("pack.json")
 }
 
-/// .MMPC/modcache
-fn modcache_dir() -> PathBuf {
-    mm().join("modcache")
-}
 
 /// 获取工作区的mods路径
 fn workspace_mods_dir(id: &str) -> PathBuf {
@@ -144,7 +140,7 @@ fn workspace_mods_dir(id: &str) -> PathBuf {
 
 /// .MMPC/mods.json
 fn mods_registry_path() -> PathBuf {
-    mm().join("mods.json")
+    MMPCDIR.join("mods.json")
 }
 
 /// 读取pack.json并解析为结构体
@@ -262,7 +258,7 @@ pub fn sync_workspace_mod_links(workspace_id: &str, mods: &[WorkspaceMod]) -> An
         if mod_entry.file_name.trim().is_empty() {
             continue;
         }
-        let cache_path = modcache_dir().join(&mod_entry.file_name);
+        let cache_path = GLOBAL_MODCACHE.join(&mod_entry.file_name);
         if !cache_path.is_file() {
             continue;
         }
@@ -589,8 +585,7 @@ pub async fn install_modrinth_mod(
 
     let cached_file_name =
         build_cached_mod_filename(&mod_name, &version.version_number, &pack.mc_version);
-    let cache_path = modcache_dir().join(&cached_file_name);
-    std::fs::create_dir_all(modcache_dir()).map_err(|e| format!("创建 modcache 目录失败: {e}"))?;
+    let cache_path = GLOBAL_MODCACHE.join(&cached_file_name);
     let should_skip_download = existing_registry_entry.is_some() && cache_path.is_file();
 
     if !should_skip_download && !cache_path.is_file() {

@@ -1,6 +1,40 @@
 pub mod prepare;
 
-use std::path::PathBuf;
+use std::{fs::create_dir_all, path::PathBuf, sync::LazyLock};
+
+pub static MMPCDIR: LazyLock<PathBuf> = LazyLock::new(|| {
+    let p = std::env::current_dir().map(|p| p.join(".MMPC"))
+        .unwrap_or(PathBuf::from(".MMPC"));
+    if !p.exists() {
+        let _ = create_dir_all(&p);
+    }
+    p
+});
+
+pub static GLOBAL_ASSETS: LazyLock<PathBuf> = LazyLock::new(|| {
+    let p = MMPCDIR.join("assets");
+    if !p.exists() {
+        let _ = create_dir_all(&p);
+    }
+    p
+});
+
+pub static GLOBAL_LIBRARIES: LazyLock<PathBuf> = LazyLock::new(|| {
+    let p = MMPCDIR.join("libraries");
+    if !p.exists() {
+        let _ = create_dir_all(&p);
+    }
+    p
+});
+
+pub static GLOBAL_MODCACHE: LazyLock<PathBuf> = LazyLock::new(|| {
+    let p = MMPCDIR.join("modcache");
+    if !p.exists() {
+        let _ = create_dir_all(&p);
+    }
+    p
+});
+
 
 #[derive(Debug, Clone)]
 pub struct RuntimeLayout {
@@ -8,10 +42,6 @@ pub struct RuntimeLayout {
     pub workspace_dir: PathBuf,
     /// workspace/versions
     pub versions_dir: PathBuf,
-    /// .MMPC/libraries
-    pub libraries_dir: PathBuf,
-    /// .MMPC/assets
-    pub assets_root: PathBuf,
     /// .MMPC/cache/installers
     pub installers_cache_dir: PathBuf,
     /// .MMPC/tmp

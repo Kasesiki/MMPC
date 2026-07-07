@@ -9,16 +9,12 @@ use mc_launcher_core::launch::offline::{LaunchConfig, OfflineLauncher};
 use mc_launcher_core::launch::version::{
     Library, default_logging_config_path, evaluate_rules, parse_version_metadata,
 };
-use mc_launcher_core::runtime::ProgressReporter;
-use mc_launcher_core::runtime::prepare::{mm, wd};
+use mc_launcher_core::runtime::{GLOBAL_LIBRARIES, ProgressReporter};
+use mc_launcher_core::runtime::prepare::{wd};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use tauri::Emitter;
 use zip::read::ZipArchive;
-
-fn shared_libraries_dir() -> PathBuf {
-    mm().join("libraries")
-}
 
 pub struct PreparedLaunch {
     pub workspace_dir: PathBuf,
@@ -212,9 +208,8 @@ pub async fn prepare_launch(
     let child_version_metadata =
         parse_version_metadata(&child_raw).map_err(|e| format!("解析启动元数据失败: {e}"))?;
 
-    let library_dir = shared_libraries_dir();
     let libraries =
-        collect_libraries_from_metadata(&library_dir, &child_version_metadata.libraries);
+        collect_libraries_from_metadata(&GLOBAL_LIBRARIES, &child_version_metadata.libraries);
     if libraries.is_empty() {
         return Err("未检测到 libraries 依赖，请先下载 MC 版本".into());
     }
@@ -222,7 +217,7 @@ pub async fn prepare_launch(
     let ws = wd(workspace_id);
 
     let native_libraries =
-        collect_native_libraries_from_metadata(&library_dir, &child_version_metadata.libraries);
+        collect_native_libraries_from_metadata(&GLOBAL_LIBRARIES, &child_version_metadata.libraries);
     prepare_natives_dir(&ws, &native_libraries).map_err(|e| e.to_string())?;
 
     // Collect JVM args
@@ -252,8 +247,6 @@ pub async fn prepare_launch(
         .map(|index| index.id.clone())
         .unwrap_or(pack.mc_version);
 
-    let assets_dir = mm().join("assets");
-
     let natives_dir = ws.join("natives");
     let logging_config = child_version_metadata
         .logging
@@ -261,15 +254,13 @@ pub async fn prepare_launch(
         .and_then(|logging| default_logging_config_path(&ws.join("versions"), logging));
 
     let lc = LaunchConfig {
-        java_path: java_path.into(),
+        java_path: java_path.clone().into(),
         version_metadata: child_version_metadata,
         version_jar: runtime_result.client_jar_path,
         classpath: libraries,
         main_class: None,
         game_dir: ws.clone(),
-        assets_dir,
         asset_index: asset_index_id,
-        library_dir,
         natives_dir,
         logging_config,
         max_mem: format!("{}M", pack.max_memory_mb),
@@ -290,7 +281,7 @@ pub async fn prepare_launch(
 
     Ok(PreparedLaunch {
         workspace_dir: ws,
-        program: lc.java_path.to_string_lossy().to_string(),
+        program: java_path,
         argfile_path: arg,
     })
 }

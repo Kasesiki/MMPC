@@ -8,7 +8,7 @@ use mc_launcher_core::runtime::prepare::{
     build_library_tasks, build_runtime_layout, check_path_sha1, execute_download_pool,
     fetch_fabric_version_value, file_matches_sha1, merge_version_json, write_json_pretty,
 };
-use mc_launcher_core::runtime::{LoaderKind, ProgressReporter};
+use mc_launcher_core::runtime::{GLOBAL_ASSETS, GLOBAL_LIBRARIES, LoaderKind, ProgressReporter};
 use mc_launcher_core::runtime::{RuntimeLayout, RuntimeResult};
 use serde_json::Value;
 use tauri::Emitter;
@@ -129,8 +129,6 @@ pub async fn ensure_workspace_runtime(
     let layout: RuntimeLayout = build_runtime_layout(workspace_id);
     std::fs::create_dir_all(&layout.versions_dir)
         .with_context(|| format!("创建 versions 目录失败: {}", layout.versions_dir.display()))?;
-    std::fs::create_dir_all(&layout.assets_root)
-        .with_context(|| format!("创建 assets 目录失败: {}", layout.assets_root.display()))?;
     std::fs::create_dir_all(&layout.installers_cache_dir).with_context(|| {
         format!(
             "创建 installer 缓存目录失败: {}",
@@ -212,7 +210,7 @@ pub async fn ensure_workspace_runtime(
         .await?;
 
     // 下载 library，存到全局共享的 .MMPC/libraries 文件夹
-    let library_tasks = build_library_tasks(&layout.libraries_dir, &download_version_json)?;
+    let library_tasks = build_library_tasks(&GLOBAL_LIBRARIES, &download_version_json)?;
     execute_download_pool(
         reporter,
         "下载 libraries",
@@ -227,8 +225,8 @@ pub async fn ensure_workspace_runtime(
     let asset_index: AssetIndexObjects =
         serde_json::from_str(&asset_index_content).context("解析 asset index 失败")?;
 
-    let indexes_dir = layout.assets_root.join("indexes");
-    let objects_dir = layout.assets_root.join("objects");
+    let indexes_dir = GLOBAL_ASSETS.join("indexes");
+    let objects_dir = GLOBAL_ASSETS.join("objects");
     std::fs::create_dir_all(&indexes_dir)
         .with_context(|| format!("创建 indexes 目录失败: {}", indexes_dir.display()))?;
     std::fs::create_dir_all(&objects_dir)

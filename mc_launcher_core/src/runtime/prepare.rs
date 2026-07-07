@@ -6,6 +6,8 @@ use futures_util::{StreamExt, stream};
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 
+use crate::runtime::MMPCDIR;
+
 use super::{ProgressReporter, RuntimeLayout};
 
 pub const MOJANG_MANIFEST_URL: &str =
@@ -155,17 +157,9 @@ pub struct DownloadTask {
     pub sha1: String,
 }
 
-/// 获取.MMPC路径
-pub fn mm() -> PathBuf {
-    let e = std::env::current_exe().unwrap_or_default();
-    e.parent()
-        .map(|p| p.join(".MMPC"))
-        .unwrap_or_else(|| PathBuf::from(".MMPC"))
-}
-
 /// 获取workspace的路径
 pub fn wd(id: &str) -> PathBuf {
-    mm().join("workspaces").join(id)
+    MMPCDIR.join("workspaces").join(id)
 }
 
 pub fn versions_dir(id: &str) -> PathBuf {
@@ -173,15 +167,12 @@ pub fn versions_dir(id: &str) -> PathBuf {
 }
 
 pub fn build_runtime_layout(workspace_id: &str) -> RuntimeLayout {
-    let root = mm();
     let workspace_dir = wd(workspace_id);
     RuntimeLayout {
         workspace_dir: workspace_dir.clone(),
         versions_dir: versions_dir(workspace_id),
-        libraries_dir: root.join("libraries"),
-        assets_root: root.join("assets"),
-        installers_cache_dir: root.join("cache").join("installers"),
-        temp_root: root.join("tmp"),
+        installers_cache_dir: MMPCDIR.join("cache").join("installers"),
+        temp_root: MMPCDIR.join("tmp"),
     }
 }
 

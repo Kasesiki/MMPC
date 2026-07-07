@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::launch::LaunchError;
+use crate::runtime::{GLOBAL_ASSETS, GLOBAL_LIBRARIES};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct VersionMetadata {
@@ -141,12 +142,10 @@ pub struct LaunchArgumentContext {
     pub client_id: String,
     pub version_name: String,
     pub game_directory: String,
-    pub assets_root: String,
     pub assets_index_name: String,
     pub user_type: String,
     pub version_type: String,
     pub natives_directory: String,
-    pub library_directory: String,
     pub launcher_name: String,
     pub launcher_version: String,
     pub classpath: String,
@@ -169,8 +168,6 @@ pub struct ResolvedLaunchArguments {
 #[derive(Debug, Clone)]
 pub struct LaunchLayout {
     pub game_dir: PathBuf,
-    pub assets_dir: PathBuf,
-    pub library_dir: PathBuf,
     pub natives_dir: PathBuf,
     pub client_jar: PathBuf,
     pub classpath_entries: Vec<PathBuf>,
@@ -370,12 +367,12 @@ pub fn build_replacements(
     replacements.insert("clientid", context.client_id.clone());
     replacements.insert("version_name", version_name.to_string());
     replacements.insert("game_directory", context.game_directory.clone());
-    replacements.insert("assets_root", context.assets_root.clone());
+    replacements.insert("assets_root", GLOBAL_ASSETS.to_string_lossy().to_string());
     replacements.insert("assets_index_name", asset_index_name.to_string());
     replacements.insert("user_type", context.user_type.clone());
     replacements.insert("version_type", context.version_type.clone());
     replacements.insert("natives_directory", context.natives_directory.clone());
-    replacements.insert("library_directory", context.library_directory.clone());
+    replacements.insert("library_directory", GLOBAL_LIBRARIES.to_string_lossy().to_string());
     replacements.insert("launcher_name", context.launcher_name.clone());
     replacements.insert("launcher_version", context.launcher_version.clone());
     replacements.insert("classpath", context.classpath.clone());
