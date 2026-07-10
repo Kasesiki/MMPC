@@ -42,10 +42,6 @@ pub struct RuntimeLayout {
     pub workspace_dir: PathBuf,
     /// workspace/versions
     pub versions_dir: PathBuf,
-    /// .MMPC/cache/installers
-    pub installers_cache_dir: PathBuf,
-    /// .MMPC/tmp
-    pub temp_root: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

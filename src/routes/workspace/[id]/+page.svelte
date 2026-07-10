@@ -506,9 +506,11 @@
         <button class={`activity-button ${viewMode === "overview" ? "is-active" : ""}`} aria-label="Explorer" onclick={() => (viewMode = "overview")}>
           <span>▣</span>
         </button>
+        {#if formatLoader() != "Vanilla"}
         <button class={`activity-button ${viewMode === "mods" ? "is-active" : ""}`} aria-label="Mod" onclick={() => (viewMode = "mods")}>
           <span>M</span>
         </button>
+        {/if}
         <button class={`activity-button ${viewMode === "export" ? "is-active" : ""}`} aria-label="Export" onclick={() => (viewMode = "export")}>
           <span>⇪</span>
         </button>

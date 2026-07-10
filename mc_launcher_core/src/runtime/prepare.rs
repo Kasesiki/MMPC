@@ -171,8 +171,6 @@ pub fn build_runtime_layout(workspace_id: &str) -> RuntimeLayout {
     RuntimeLayout {
         workspace_dir: workspace_dir.clone(),
         versions_dir: versions_dir(workspace_id),
-        installers_cache_dir: MMPCDIR.join("cache").join("installers"),
-        temp_root: MMPCDIR.join("tmp"),
     }
 }
 

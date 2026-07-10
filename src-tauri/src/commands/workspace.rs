@@ -39,7 +39,6 @@ pub struct PackConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceMod {
     pub project_id: String,
-    pub version_id: String,
     pub mod_name: String,
     pub mod_version: String,
     pub mc_version: String,
@@ -67,7 +66,6 @@ where
         match item {
             Value::String(project_id) => mods.push(WorkspaceMod {
                 project_id,
-                version_id: String::new(),
                 mod_name: String::new(),
                 mod_version: String::new(),
                 mc_version: String::new(),

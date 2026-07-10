@@ -113,30 +113,9 @@ pub async fn ensure_workspace_runtime(
     reporter.send("正在加载配置文件....");
     let settings = load_settings().unwrap_or_default();
 
-    // prepare_runtime(
-    //     workspace_id,
-    //     &RuntimeRequest {
-    //         mc_version: pack.mc_version.to_string(),
-    //         loader: LoaderKind::from_str(&pack.loader_type),
-    //         loader_version: pack.loader_version.clone(),
-    //         java_path: resolve_workspace_java_path(&pack)?,
-    //         download_concurrency: settings.download_pool_size.max(1),
-    //     },
-    //     reporter,
-    // )
-    // .await
-
     let layout: RuntimeLayout = build_runtime_layout(workspace_id);
     std::fs::create_dir_all(&layout.versions_dir)
         .with_context(|| format!("创建 versions 目录失败: {}", layout.versions_dir.display()))?;
-    std::fs::create_dir_all(&layout.installers_cache_dir).with_context(|| {
-        format!(
-            "创建 installer 缓存目录失败: {}",
-            layout.installers_cache_dir.display()
-        )
-    })?;
-    std::fs::create_dir_all(&layout.temp_root)
-        .with_context(|| format!("创建临时目录失败: {}", layout.temp_root.display()))?;
 
     reporter.send("获取原版版本清单");
     let inherited_version_json_path = layout

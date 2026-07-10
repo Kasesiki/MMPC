@@ -17,18 +17,6 @@ pub struct WorkspaceModOverview {
     pub mod_type: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModrinthVersionSummary {
-    pub version_id: String,
-    pub version_number: String,
-    pub game_versions: Vec<String>,
-    pub loaders: Vec<String>,
-    pub file_name: String,
-    pub download_url: String,
-    pub size: u64,
-    pub sha1: Option<String>,
-}
-
 #[derive(Debug, Deserialize)]
 struct ModrinthSearchResponse {
     hits: Vec<ModrinthProjectHit>,
@@ -48,12 +36,7 @@ pub struct ModrinthProjectHit {
 
 #[derive(Debug, Deserialize)]
 struct ModrinthVersion {
-    id: String,
     version_number: String,
-    #[serde(default)]
-    game_versions: Vec<String>,
-    #[serde(default)]
-    loaders: Vec<String>,
     files: Vec<ModrinthFile>,
 }
 
@@ -61,17 +44,6 @@ struct ModrinthVersion {
 struct ModrinthFile {
     filename: String,
     url: String,
-    size: u64,
-    #[serde(default)]
-    hashes: ModrinthHashes,
-    #[serde(default)]
-    primary: bool,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct ModrinthHashes {
-    #[serde(default)]
-    sha1: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -174,28 +146,6 @@ fn write_mod_registry(registry: &[Mod]) -> AnyResult<()> {
         .with_context(|| format!("写入 mods.json 失败: {}", path.display()))
 }
 
-fn sanitize_filename_component(value: &str) -> String {
-    value
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.' {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>()
-}
-
-fn build_cached_mod_filename(mod_name: &str, mod_version: &str, mc_version: &str) -> String {
-    format!(
-        "{}_{}_{}.jar",
-        sanitize_filename_component(mod_name),
-        sanitize_filename_component(mod_version),
-        sanitize_filename_component(mc_version)
-    )
-}
-
 fn ensure_symlink(src: &Path, dest: &Path) -> AnyResult<()> {
     if dest.exists() {
         let metadata = std::fs::symlink_metadata(dest)
@@ -286,15 +236,6 @@ pub fn sync_workspace_mod_links(workspace_id: &str, mods: &[WorkspaceMod]) -> An
     }
 
     Ok(())
-}
-
-fn normalize_loader_for_modrinth(loader_type: &str) -> Option<&'static str> {
-    match loader_type.trim().to_lowercase().as_str() {
-        "fabric" => Some("fabric"),
-        "forge" => Some("forge"),
-        "neoforge" => Some("neoforge"),
-        _ => None,
-    }
 }
 
 fn mod_registry_key(title: &str, mod_name: &str, project_id: &str) -> String {
@@ -407,14 +348,11 @@ fn update_mod_registry_type(registry_key: &str, mod_type: ModUsageType) -> Resul
 async fn fetch_latest_version(
     project_id: &str,
     mc_version: &str,
-    loader: Option<&str>,
-) -> Result<Option<ModrinthVersionSummary>, String> {
-    let mut url = format!(
-        "https://api.modrinth.com/v2/project/{project_id}/version?game_versions=[\"{mc_version}\"]"
+    loader: &str,
+) -> Result<(ModrinthFile, String), String> {
+    let url = format!(
+        "https://api.modrinth.com/v2/project/{project_id}/version?game_versions=[\"{mc_version}\"]&loaders=[\"{loader}\"]"
     );
-    if let Some(loader) = loader {
-        url.push_str(&format!("&loaders=[\"{loader}\"]"));
-    }
 
     let versions: Vec<ModrinthVersion> = reqwest::get(&url)
         .await
@@ -425,26 +363,15 @@ async fn fetch_latest_version(
         .await
         .map_err(|e| format!("解析 Modrinth 版本失败: {e}"))?;
 
-    let Some(version) = versions.into_iter().next() else {
-        return Ok(None);
-    };
-    let file = version
-        .files
-        .iter()
-        .find(|file| file.primary)
-        .or_else(|| version.files.first())
-        .ok_or_else(|| "该模组版本没有可下载文件".to_string())?;
+    
+    
+    let version = versions.into_iter().next().ok_or("未找到可用版本")?;
+    
+    while let Some(file) = version.files.into_iter().next() {
+        return Ok((file, version.version_number))
+    }
 
-    Ok(Some(ModrinthVersionSummary {
-        version_id: version.id,
-        version_number: version.version_number,
-        game_versions: version.game_versions,
-        loaders: version.loaders,
-        file_name: file.filename.clone(),
-        download_url: file.url.clone(),
-        size: file.size,
-        sha1: file.hashes.sha1.clone(),
-    }))
+    return Err("版本无可用下载链接".to_string())
 }
 
 #[tauri::command]
@@ -453,17 +380,10 @@ pub async fn search_modrinth_mods(
     query: Option<String>,
 ) -> Result<Vec<ModrinthProjectHit>, String> {
     let pack = read_pack_config(&workspace_id).map_err(|e| e.to_string())?;
-    let facets = if let Some(loader) = normalize_loader_for_modrinth(&pack.loader_type) {
-        format!(
+    let facets = format!(
             "[[\"project_type:mod\"],[\"versions:{}\"],[\"categories:{}\"]]",
-            pack.mc_version, loader
-        )
-    } else {
-        format!(
-            "[[\"project_type:mod\"],[\"versions:{}\"]]",
-            pack.mc_version
-        )
-    };
+            pack.mc_version, pack.loader_type
+        );
     let base = format!("https://api.modrinth.com/v2/search?limit=20&facets={facets}");
     let url = match query
         .as_deref()
@@ -495,49 +415,10 @@ pub async fn install_modrinth_mod(
     project_id: String,
 ) -> Result<WorkspaceMod, String> {
     let mut pack: PackConfig = read_pack_config(&workspace_id).map_err(|e| e.to_string())?;
-    let loader = normalize_loader_for_modrinth(&pack.loader_type);
     let existing_registry_entry = registry_entry_by_project_id(&project_id);
 
-    let version_summary = fetch_latest_version(&project_id, &pack.mc_version, loader)
-        .await?
-        .ok_or_else(|| "未找到匹配当前工作区版本/加载器的模组版本".to_string())?;
-
-    let version_id = version_summary.version_id;
-    let version_url = format!("https://api.modrinth.com/v2/version/{version_id}");
-    let version: ModrinthVersion = reqwest::get(&version_url)
-        .await
-        .map_err(|e| format!("请求 Modrinth 版本详情失败: {e}"))?
-        .error_for_status()
-        .map_err(|e| format!("Modrinth 版本详情状态异常: {e}"))?
-        .json()
-        .await
-        .map_err(|e| format!("解析 Modrinth 版本详情失败: {e}"))?;
-
-    if !version
-        .game_versions
-        .iter()
-        .any(|value| value == &pack.mc_version)
-    {
-        return Err(format!(
-            "模组版本 {} 不支持 MC {}",
-            version.version_number, pack.mc_version
-        ));
-    }
-    if let Some(loader) = loader {
-        if !version.loaders.iter().any(|value| value == loader) {
-            return Err(format!(
-                "模组版本 {} 不支持加载器 {}",
-                version.version_number, loader
-            ));
-        }
-    }
-
-    let file = version
-        .files
-        .iter()
-        .find(|file| file.primary)
-        .or_else(|| version.files.first())
-        .ok_or_else(|| "该模组版本没有可下载文件".to_string())?;
+    let (file, version_number) = fetch_latest_version(&project_id, &pack.mc_version, &pack.loader_type)
+        .await?;
 
     let (project, mod_name, title, registry_key, mod_type) =
         if let Some(entry) = existing_registry_entry.clone() {
@@ -583,9 +464,7 @@ pub async fn install_modrinth_mod(
             (project, mod_name, title, registry_key, mod_type)
         };
 
-    let cached_file_name =
-        build_cached_mod_filename(&mod_name, &version.version_number, &pack.mc_version);
-    let cache_path = GLOBAL_MODCACHE.join(&cached_file_name);
+    let cache_path = GLOBAL_MODCACHE.join(&file.filename);
     let should_skip_download = existing_registry_entry.is_some() && cache_path.is_file();
 
     if !should_skip_download && !cache_path.is_file() {
@@ -602,11 +481,10 @@ pub async fn install_modrinth_mod(
 
     let mod_entry = WorkspaceMod {
         project_id,
-        version_id: version.id,
         mod_name,
-        mod_version: version.version_number,
+        mod_version: version_number,
         mc_version: pack.mc_version.clone(),
-        file_name: cached_file_name,
+        file_name: file.filename,
         title,
         mod_type: mod_type.as_str().to_string(),
         enabled: true,
